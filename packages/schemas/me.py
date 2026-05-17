@@ -24,6 +24,12 @@ class BankAccountRotate(BaseModel):
     password: str = Field(min_length=1, max_length=255)
 
 
+class BankAccountUpdate(BaseModel):
+    """Toggle polling tạm thời (pause khi user chuyển tiền trên app mobile)."""
+
+    polling_enabled: bool
+
+
 class BankAccountRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

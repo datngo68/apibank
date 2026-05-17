@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle2, ShieldCheck } from "lucide-react";
+import { Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle2, ShieldCheck, Pause, Play } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -113,7 +113,20 @@ function BankCard({ bank }: { bank: BankAccount }) {
     },
     onError: (err) => toast.error(toApiError(err).detail),
   });
+  const togglePolling = useMutation({
+    mutationFn: (enabled: boolean) => endpoints.setBankPolling(bank.id, enabled),
+    onSuccess: (_data, enabled) => {
+      toast.success(
+        enabled
+          ? "Đã bật polling — worker sẽ kết nối lại"
+          : "Đã tạm ngắt — bạn có thể dùng app mobile mà không bị logout",
+      );
+      qc.invalidateQueries({ queryKey: ["banks"] });
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
   const isVerified = !!bank.verified_at;
+  const isPaused = !bank.polling_enabled;
 
   return (
     <Card>
@@ -133,6 +146,11 @@ function BankCard({ bank }: { bank: BankAccount }) {
                 <Badge variant="muted">Chưa verify</Badge>
               )}
               <Badge variant="muted">{bank.status}</Badge>
+              {isPaused ? (
+                <Badge variant="muted" title="Worker đã tạm ngừng polling tài khoản này">
+                  Đã tạm ngắt
+                </Badge>
+              ) : null}
             </CardTitle>
             <CardDescription className="font-mono">{bank.account_no}</CardDescription>
           </div>
@@ -169,22 +187,38 @@ function BankCard({ bank }: { bank: BankAccount }) {
             <ShieldCheck aria-hidden />
             {isVerified ? "Kiểm tra lại" : "Liên kết & kiểm tra"}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={remove.isPending}
-            onClick={async () => {
-              const ok = await confirm({
-                title: "Xoá tài khoản ngân hàng",
-                description: `Tài khoản ${bank.bank_code} · ${bank.account_no} sẽ bị xoá. Worker sẽ ngừng polling và mọi đơn hàng đang chờ sẽ không match được nữa.`,
-                confirmText: "Xoá",
-                variant: "destructive",
-              });
-              if (ok) remove.mutate();
-            }}
-          >
-            <Trash2 aria-hidden /> Xoá
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={togglePolling.isPending}
+              onClick={() => togglePolling.mutate(!bank.polling_enabled)}
+              title={
+                isPaused
+                  ? "Kết nối lại — worker sẽ tiếp tục kiểm tra biến động"
+                  : "Tạm ngắt — dùng app mobile ngân hàng không bị logout"
+              }
+            >
+              {isPaused ? <Play aria-hidden /> : <Pause aria-hidden />}
+              {isPaused ? "Kết nối lại" : "Tạm ngắt"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={remove.isPending}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: "Xoá tài khoản ngân hàng",
+                  description: `Tài khoản ${bank.bank_code} · ${bank.account_no} sẽ bị xoá. Worker sẽ ngừng polling và mọi đơn hàng đang chờ sẽ không match được nữa.`,
+                  confirmText: "Xoá",
+                  variant: "destructive",
+                });
+                if (ok) remove.mutate();
+              }}
+            >
+              <Trash2 aria-hidden /> Xoá
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -289,6 +289,8 @@ export const endpoints = {
     api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/rotate`, body),
   verifyBank: (id: string) =>
     api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/verify`),
+  setBankPolling: (id: string, polling_enabled: boolean) =>
+    api.patch<BankAccount>(`/api/v1/me/bank-accounts/${id}`, { polling_enabled }),
   deleteBank: (id: string) => api.delete(`/api/v1/me/bank-accounts/${id}`),
 
   // webhooks

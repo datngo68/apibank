@@ -48,6 +48,7 @@ from packages.schemas.me import (
     BankAccountCreate,
     BankAccountRead,
     BankAccountRotate,
+    BankAccountUpdate,
     InvoiceRead,
     MeApiKeyCreate,
     MeApiKeyCreated,
@@ -261,6 +262,52 @@ async def verify_bank_account(
     )
     await session.commit()
     # Kick worker re-pickup (nếu trước đó đang ở auth_failed → running).
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish("bank:account:added", account.id)
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return BankAccountRead.model_validate(account, from_attributes=True)
+
+
+@router.patch(
+    "/bank-accounts/{bank_account_id}", response_model=BankAccountRead
+)
+async def update_bank_account(
+    bank_account_id: str,
+    payload: BankAccountUpdate,
+    request: Request,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BankAccountRead:
+    """Pause/resume polling cho 1 bank account.
+
+    Use case chính: user muốn dùng app mobile của ngân hàng (chuyển tiền,
+    đổi mật khẩu) — bật `polling_enabled=false` để worker bỏ task poll, MB
+    không kick session mobile. Khi xong, bật lại `true` và worker tự pickup
+    qua kênh pubsub (best-effort) hoặc tick rescan kế tiếp.
+    """
+    account = await _get_user_bank(session, user, bank_account_id)
+    if account.polling_enabled == payload.polling_enabled:
+        # Idempotent: trả về luôn, không audit.
+        return BankAccountRead.model_validate(account, from_attributes=True)
+
+    account.polling_enabled = payload.polling_enabled
+    if payload.polling_enabled:
+        # Reset trạng thái lỗi cũ để worker khởi động sạch sẽ.
+        account.last_error = None
+        account.polling_status = "idle"
+    await record_audit(
+        session,
+        actor=user.id,
+        action="bank.resume" if payload.polling_enabled else "bank.pause",
+        target_type="bank_account",
+        target_id=account.id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    # Báo worker rescan để cancel task cũ (pause) hoặc start task mới (resume).
     try:
         from packages.infra_pubsub import publish
 
