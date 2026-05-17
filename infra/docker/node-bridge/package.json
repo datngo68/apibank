@@ -1,0 +1,11 @@
+{
+  "name": "apibank-mb-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^4.21.0",
+    "mbbank": "^1.8.8"
+  }
+}

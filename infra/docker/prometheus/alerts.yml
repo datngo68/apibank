@@ -1,0 +1,36 @@
+groups:
+  - name: apibank
+    rules:
+      - alert: PollerLagHigh
+        expr: time() - apibank_poller_last_success_timestamp > 120
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bank polling stalled"
+          description: "Poller chưa cập nhật trong > 2 phút."
+
+      - alert: WebhookFailureSpike
+        expr: |
+          sum(rate(apibank_webhook_failure_total[5m]))
+            / sum(rate(apibank_webhook_attempts_total[5m])) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Webhook failure rate > 20%"
+
+      - alert: AuthBruteForce
+        expr: sum(rate(apibank_auth_login_total{result="fail"}[5m])) > 10
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Login failure rate cao bất thường"
+
+      - alert: ApiP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(apibank_http_request_duration_seconds_bucket[5m])) by (le, route)
+          ) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API p95 > 1s trong 10 phút"

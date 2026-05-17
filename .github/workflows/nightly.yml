@@ -1,0 +1,74 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 18 * * *"  # 01:00 GMT+7
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" pip-audit
+      - name: Run pip-audit (fail on high+)
+        run: |
+          pip-audit --strict --format json --output pip-audit.json -r <(pip freeze) || EXIT=$?
+          if [ -n "$EXIT" ] && [ "$EXIT" -ne 0 ]; then
+            echo "pip-audit reported vulnerabilities; see artifact"
+            cat pip-audit.json || true
+            exit "$EXIT"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: Run npm audit (fail on high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  openapi-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Regenerate openapi.json and compare
+        run: |
+          python scripts/dump_openapi.py
+          if ! git diff --quiet --exit-code docs/openapi.json; then
+            echo "::error::docs/openapi.json drift; run 'python scripts/dump_openapi.py' and commit"
+            git diff docs/openapi.json
+            exit 1
+          fi

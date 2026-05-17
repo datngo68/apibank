@@ -1,0 +1,56 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "title": "APIBank Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Polls (success/min)",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(apibank_poll_success_total[1m])) by (bank)"}
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Polls (failure/min)",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(apibank_poll_failure_total[1m])) by (bank)"}
+      ],
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}
+    },
+    {
+      "type": "timeseries",
+      "title": "Webhook attempts (status/sec)",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(apibank_webhook_attempts_total[1m])) by (status)"}
+      ],
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 6}
+    },
+    {
+      "type": "timeseries",
+      "title": "Webhook delivery p95 seconds",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(apibank_webhook_delivery_seconds_bucket[5m])))"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 10, "w": 12, "h": 6}
+    },
+    {
+      "type": "timeseries",
+      "title": "Match outcomes",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "sum(rate(apibank_match_total[5m])) by (result)"}
+      ],
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 6}
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Thanh toán {{ order.code }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-slate-50 min-h-screen flex items-center justify-center p-4">
+    <main class="bg-white shadow rounded-xl max-w-md w-full p-6 space-y-4">
+      <h1 class="text-xl font-semibold text-center">Thanh toán đơn <span class="font-mono">{{ order.code }}</span></h1>
+
+      <div id="status-banner" class="text-center text-sm text-slate-500">Đang chờ thanh toán…</div>
+
+      <div class="flex justify-center">
+        <img id="qr-image" src="/qr/{{ order.id }}.png" alt="VietQR" class="w-72 h-72 border rounded-lg bg-white" />
+      </div>
+
+      <dl class="text-sm text-slate-700 space-y-1">
+        <div class="flex justify-between"><dt>Số tiền</dt><dd class="font-semibold">{{ "{:,.0f}".format(order.amount_vnd) }} đ</dd></div>
+        <div class="flex justify-between"><dt>Nội dung</dt><dd class="font-mono">{{ order.code }}</dd></div>
+        {% if bank_account %}
+        <div class="flex justify-between"><dt>Ngân hàng</dt><dd>{{ bank_account.bank_code }}</dd></div>
+        <div class="flex justify-between"><dt>Số tài khoản</dt><dd class="font-mono">{{ bank_account.account_no }}</dd></div>
+        <div class="flex justify-between"><dt>Chủ tài khoản</dt><dd>{{ bank_account.account_holder }}</dd></div>
+        {% endif %}
+        <div class="flex justify-between"><dt>Hết hạn lúc</dt><dd>{{ order.expired_at.strftime("%H:%M %d/%m/%Y") }}</dd></div>
+      </dl>
+
+      <p class="text-xs text-slate-500 text-center">Vui lòng quét mã QR hoặc chuyển khoản đúng số tiền và nội dung.</p>
+    </main>
+
+    <script>
+      const code = "{{ order.code }}";
+      const banner = document.getElementById("status-banner");
+      async function poll() {
+        try {
+          const response = await fetch(`/pay/${code}/status`, { cache: "no-store" });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (data.status === "paid") {
+            banner.textContent = "✓ Thanh toán thành công";
+            banner.className = "text-center text-sm text-emerald-600 font-semibold";
+            return;
+          }
+          if (data.status === "expired" || data.status === "canceled") {
+            banner.textContent = "Đơn hết hạn hoặc đã hủy.";
+            banner.className = "text-center text-sm text-rose-600";
+            return;
+          }
+          setTimeout(poll, 5000);
+        } catch (err) {
+          setTimeout(poll, 5000);
+        }
+      }
+      poll();
+    </script>
+  </body>
+</html>

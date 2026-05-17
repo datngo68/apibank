@@ -1,0 +1,107 @@
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    env_file: ../../.env
+    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    env_file: ../../.env
+    command: python -m apps.worker.main
+    depends_on:
+      - api
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    env_file: ../../.env
+    command: python -m apps.scheduler.main
+    depends_on:
+      - api
+
+  mb-bridge:
+    build:
+      context: ./node-bridge
+    environment:
+      MB_USERNAME: "${MB_BRIDGE_USERNAME:-}"
+      MB_PASSWORD: "${MB_BRIDGE_PASSWORD:-}"
+    profiles: ["fallback"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: apibank
+      POSTGRES_USER: apibank
+      POSTGRES_PASSWORD: apibank
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apibank -d apibank"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  grafana_data:
