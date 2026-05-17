@@ -15,6 +15,7 @@ from apps.api.middleware.rate_limit import RateLimitMiddleware
 from apps.api.middleware.security_headers import SecurityHeadersMiddleware
 from apps.api.routes.admin_console import router as admin_console_router
 from apps.api.routes.auth import router as auth_router
+from apps.api.routes.bank_accounts import router as bank_accounts_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.me import public_router as me_public_router
 from apps.api.routes.me import router as me_router
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(orders_router, prefix="/v1")
     app.include_router(transactions_router, prefix="/v1")
     app.include_router(webhooks_router, prefix="/v1")
+    app.include_router(bank_accounts_router, prefix="/v1")
     app.include_router(admin_console_router)
     app.include_router(telegram_router)
     app.include_router(topup_stream_router)

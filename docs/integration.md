@@ -44,6 +44,7 @@ Flow tóm gọn:
    - `orders:write` — tạo / huỷ order.
    - `orders:read` — đọc order.
    - `transactions:read` — đọc lịch sử giao dịch.
+   - `bank_accounts:read` — list bank accounts (cho UI integration render dropdown).
    - `admin:*` — chỉ cấp khi cần quản lý webhook hệ thống cấp cao.
 3. **Copy ngay** key dạng `sk_live_xxx...` — server không lưu plaintext, chỉ
    hash. Mất là phải tạo lại.

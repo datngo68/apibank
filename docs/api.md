@@ -62,6 +62,7 @@ Số lượng path tự sinh từ OpenAPI:
 | `/api/v1/admin/*` (~25) | Users, plans, bank accounts, system bank, audit log, SMTP/Google/Telegram config | cookie + CSRF + role admin/owner + 2FA khuyến nghị |
 | `/v1/orders` `POST/GET/cancel` | Tạo/đọc/huỷ order | Bearer + scope `orders:write` / `orders:read` |
 | `/v1/transactions` | Liệt kê tx | Bearer + scope `transactions:read` |
+| `/v1/bank-accounts` | List bank accounts của user (cho UI integration) | Bearer + scope `bank_accounts:read` |
 | `/v1/webhooks` (admin scope) | Quản lý webhook hệ thống | Bearer + `admin:*` |
 | `/api/v1/telegram/webhook` | Telegram bot inbound | secret token header |
 | `/pay/{code}`, `/pay/{code}/status`, `/pay/{code}/events` | Payment landing + SSE | none / signed code |

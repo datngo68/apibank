@@ -649,6 +649,7 @@ _ALLOWED_SCOPES = {
     "orders:write",
     "transactions:read",
     "webhooks:read",
+    "bank_accounts:read",
 }
 
 

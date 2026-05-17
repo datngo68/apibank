@@ -47,6 +47,7 @@ const SCOPES = [
   "orders:write",
   "orders:read",
   "transactions:read",
+  "bank_accounts:read",
   "webhooks:read",
 ];
 
