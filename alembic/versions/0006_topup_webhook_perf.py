@@ -40,12 +40,14 @@ def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
     if dialect == "postgresql":
+        # `?` chỉ áp dụng cho jsonb, không phải json. Cast trước khi check.
+        # Cũng tránh metadata_json IS NULL bằng coalesce.
         bind.execute(
             sa.text(
                 """
                 UPDATE orders
                 SET user_id = metadata_json->>'user_id'
-                WHERE metadata_json ? 'user_id'
+                WHERE COALESCE(metadata_json::jsonb ? 'user_id', false)
                 """
             )
         )
