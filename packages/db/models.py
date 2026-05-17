@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -14,7 +14,15 @@ def utcnow() -> datetime:
 
 
 class Base(DeclarativeBase):
-    type_annotation_map = {dict[str, Any]: JSON}
+    # Map mọi `Mapped[datetime]` (và Optional) sang TIMESTAMP WITH TIME ZONE.
+    # Lý do: code dùng `datetime.now(UTC)` (tz-aware), Postgres strict yêu
+    # cầu cột TIMESTAMPTZ; SQLite không có timezone, fallback an toàn.
+    # Nếu không khai báo, SQLAlchemy tạo TIMESTAMP WITHOUT TIME ZONE →
+    # asyncpg reject "can't subtract offset-naive and offset-aware datetimes".
+    type_annotation_map = {
+        dict[str, Any]: JSON,
+        datetime: DateTime(timezone=True),
+    }
 
 
 class BankAccount(Base):
