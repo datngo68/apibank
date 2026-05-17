@@ -9,6 +9,7 @@ Mỗi endpoint:
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -83,6 +84,8 @@ from packages.webhook import (
     encrypt_webhook_secret,
     validate_webhook_url,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/me", tags=["me"])
 public_router = APIRouter(prefix="/api/v1", tags=["public"])
@@ -550,10 +553,12 @@ async def replay_attempt(
     await session.commit()
     # Kick scheduler dispatcher để dispatch ngay (thay vì đợi tick 30s).
     try:
+        from packages.infra_pubsub import publish
+
         await publish("webhook:kick", "1")
     except Exception:  # noqa: BLE001
         # Replay vẫn thành công — scheduler tick 30s vẫn pickup được.
-        pass
+        logger.warning("webhook_kick_publish_failed", exc_info=True)
     return GenericMessage(message="queued")
 
 
