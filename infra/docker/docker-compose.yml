@@ -1,44 +1,92 @@
-services:
-  caddy:
-    image: caddy:2
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    depends_on:
-      - api
+# Production-grade docker-compose cho APIBank.
+#
+# Sử dụng:
+#   cp infra/docker/.env.production.example .env
+#   # chỉnh .env với domain, password, Cloudflare token...
+#   bash infra/docker/bootstrap.sh         # sinh secret + tạo admin (1 lần)
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#
+# Stack: caddy (Cloudflare DNS-01) → api → postgres + redis.
+# worker + scheduler là process riêng (KHÔNG dùng APIBANK_EMBED_WORKERS) để
+# scale ngang về sau. Migration chạy 1 lần qua service `migrate`.
 
-  api:
+services:
+  migrate:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile
+    image: apibank:latest
     env_file: ../../.env
-    command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
     depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: apibank:latest
+    env_file: ../../.env
+    environment:
+      APIBANK_EMBED_WORKERS: "0"
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   worker:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
+    image: apibank:latest
     env_file: ../../.env
-    command: python -m apps.worker.main
+    command: ["python", "-m", "apps.worker.main"]
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   scheduler:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
+    image: apibank:latest
     env_file: ../../.env
-    command: python -m apps.scheduler.main
+    command: ["python", "-m", "apps.scheduler.main"]
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: apibank-caddy:latest
+    ports:
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      APIBANK_DOMAIN: "${APIBANK_DOMAIN}"
+      APIBANK_ACME_EMAIL: "${APIBANK_ACME_EMAIL}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN}"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
   mb-bridge:
     build:
@@ -47,24 +95,26 @@ services:
       MB_USERNAME: "${MB_BRIDGE_USERNAME:-}"
       MB_PASSWORD: "${MB_BRIDGE_PASSWORD:-}"
     profiles: ["fallback"]
+    restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: apibank
-      POSTGRES_USER: apibank
-      POSTGRES_PASSWORD: apibank
+      POSTGRES_DB: "${POSTGRES_DB:-apibank}"
+      POSTGRES_USER: "${POSTGRES_USER:-apibank}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD bắt buộc trong .env}"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U apibank -d apibank"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-apibank} -d ${POSTGRES_DB:-apibank}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
     healthcheck:
@@ -72,36 +122,40 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-    ports:
-      - "9090:9090"
+    profiles: ["observability"]
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    profiles: ["observability"]
+    restart: unless-stopped
 
   loki:
     image: grafana/loki:latest
-    ports:
-      - "3100:3100"
+    profiles: ["observability"]
+    restart: unless-stopped
 
   promtail:
     image: grafana/promtail:latest
     volumes:
       - ./promtail/config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    profiles: ["observability"]
+    restart: unless-stopped
 
 volumes:
   pgdata:
   redisdata:
   caddy_data:
+  caddy_config:
   grafana_data:
