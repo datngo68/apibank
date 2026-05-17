@@ -159,6 +159,41 @@ Authorization: Bearer sk_live_xxx
 
 Trả 200 + order với `status: cancelled`. Đã `paid` thì không hủy được.
 
+### Tăng tốc cho topup ví
+
+Trên dashboard `/app/wallet`, dialog QR và bảng "Đơn nạp đang chờ" có nút
+**"Tôi đã chuyển khoản"** — bấm sau khi CK xong để check ngay thay vì đợi
+worker poll tick kế (~20s).
+
+Endpoint dưới capot:
+
+```http
+POST /api/v1/me/topups/{order_id}:check
+Cookie: apibank_session=...
+X-CSRF-Token: ...
+```
+
+```json
+{
+  "order_id": "ord_01HXXXX...",
+  "code": "APIB7K3M2A",
+  "status": "paid",
+  "balance_vnd": "150000",
+  "waited_ms": 1850,
+  "message": "Nạp tiền thành công, số dư đã được cộng."
+}
+```
+
+`status` có thể là `pending` (chưa thấy giao dịch — message hướng dẫn user
+đợi 30–60s rồi thử lại), `paid` (đã match + cộng ví), `expired`, `canceled`.
+Endpoint kick worker poll loop ngay (qua Redis pub/sub `bank:poll:kick`)
+rồi đợi tối đa 12s xem order chuyển `paid` không. Idempotent — gọi nhiều
+lần an toàn.
+
+> Endpoint này dành cho dashboard ví của user, **không thay thế** webhook
+> cho merchant — `/v1/orders` vẫn dùng `GET /v1/orders/{id}` hoặc webhook
+> `payment.succeeded` để theo dõi đơn.
+
 ---
 
 ## 4. Nhận webhook — `payment.succeeded`

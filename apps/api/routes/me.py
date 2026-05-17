@@ -8,6 +8,7 @@ Mỗi endpoint:
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.banks import poll_kick
 from packages.billing import subscription as subscription_pkg
 from packages.billing import topup as topup_pkg
 from packages.billing import wallet as wallet_pkg
@@ -65,6 +67,7 @@ from packages.schemas.me import (
     PlanRead,
     SubscriptionPurchaseRequest,
     SubscriptionRead,
+    TopupCheckResponse,
     TopupCreateRequest,
     TopupListItem,
     TopupResponse,
@@ -927,6 +930,129 @@ async def cancel_pending_topup(
     )
     await session.commit()
     return _topup_list_item(order, bank)
+
+
+# Tổng thời gian backend đợi trạng thái mới sau khi kick worker. Worker poll
+# bank ~20s/lần, nên 12s bao quát phần lớn case "vừa CK xong vài giây trước".
+# Vượt quá → trả pending; FE hiển thị toast "đang chờ", user có thể bấm lại.
+_TOPUP_CHECK_MAX_WAIT_SEC = 12.0
+_TOPUP_CHECK_POLL_SEC = 0.5
+
+
+@router.post("/topups/{order_id}:check", response_model=TopupCheckResponse)
+async def check_pending_topup(
+    order_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> TopupCheckResponse:
+    """User bấm "Tôi đã chuyển khoản" — kick worker poll ngay rồi đợi check.
+
+    Flow:
+      1. Verify order tồn tại + thuộc về user + là topup.
+      2. Nếu đã ``paid`` → trả ngay với balance hiện tại.
+      3. Nếu ``pending`` → ``poll_kick.kick(bank_id)`` để worker thoát sleep
+         poll_interval, fetch tx mới ngay. BE poll DB mỗi 0.5s, đợi tối đa
+         12s xem order có chuyển ``paid`` không.
+      4. Hết thời gian vẫn ``pending`` → trả ``pending`` + message hướng dẫn.
+
+    Idempotent: gọi nhiều lần an toàn (chỉ kick poll loop, không tạo order/tx).
+    Audit: ghi action ``topup.check`` để admin trace user lạm dụng.
+    """
+    order = await session.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="topup not found")
+    meta = order.metadata_json or {}
+    if meta.get("kind") != topup_pkg.TOPUP_KIND:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="topup not found")
+    is_owner = meta.get("user_id") == user.id or order.customer_ref == user.email
+    if not is_owner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="topup not found")
+
+    initial_status = order.status
+
+    # Đã paid trước đó → trả luôn balance, không cần kick.
+    if initial_status == "paid":
+        return TopupCheckResponse(
+            order_id=order.id,
+            code=order.code,
+            status="paid",
+            balance_vnd=Decimal(user.balance_vnd),
+            waited_ms=0,
+            message="Đơn nạp đã được ghi nhận. Số dư đã cộng vào ví.",
+        )
+
+    if initial_status in ("expired", "canceled"):
+        return TopupCheckResponse(
+            order_id=order.id,
+            code=order.code,
+            status=initial_status,
+            waited_ms=0,
+            message=(
+                "Đơn nạp đã hết hạn." if initial_status == "expired"
+                else "Đơn nạp đã bị huỷ."
+            ),
+        )
+
+    # Audit user click — phòng abuse + trace khi user kêu "tiền không về".
+    await record_audit(
+        session,
+        actor=user.id,
+        action="topup.check",
+        target_type="order",
+        target_id=order.id,
+        ip=request.client.host if request.client else None,
+        after={"amount_vnd": int(order.amount_vnd)},
+    )
+    await session.commit()
+
+    # Kick worker poll loop. Best-effort — nếu cả Redis lẫn local đều
+    # không có subscriber (vd worker chưa chạy), vẫn fallback poll DB,
+    # nhưng có thể không thấy tx mới trong 12s.
+    await poll_kick.kick(order.bank_account_id)
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while True:
+        await asyncio.sleep(_TOPUP_CHECK_POLL_SEC)
+        # Re-fetch order ở session mới để tránh đọc bản cache đã expunged.
+        await session.refresh(order)
+        if order.status == "paid":
+            await session.refresh(user)
+            elapsed_ms = int((loop.time() - started) * 1000)
+            return TopupCheckResponse(
+                order_id=order.id,
+                code=order.code,
+                status="paid",
+                balance_vnd=Decimal(user.balance_vnd),
+                waited_ms=elapsed_ms,
+                message="Nạp tiền thành công, số dư đã được cộng.",
+            )
+        if order.status in ("expired", "canceled"):
+            elapsed_ms = int((loop.time() - started) * 1000)
+            return TopupCheckResponse(
+                order_id=order.id,
+                code=order.code,
+                status=order.status,
+                waited_ms=elapsed_ms,
+                message=(
+                    "Đơn nạp đã hết hạn trong lúc check."
+                    if order.status == "expired"
+                    else "Đơn nạp đã bị huỷ."
+                ),
+            )
+        if loop.time() - started >= _TOPUP_CHECK_MAX_WAIT_SEC:
+            elapsed_ms = int((loop.time() - started) * 1000)
+            return TopupCheckResponse(
+                order_id=order.id,
+                code=order.code,
+                status="pending",
+                waited_ms=elapsed_ms,
+                message=(
+                    "Hệ thống chưa thấy giao dịch. Nếu bạn vừa chuyển khoản, "
+                    "vui lòng đợi 30–60 giây để ngân hàng cập nhật rồi thử lại."
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------

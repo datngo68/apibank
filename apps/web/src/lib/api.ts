@@ -185,6 +185,15 @@ export interface TopupResponse {
   transfer_content: string;
 }
 
+export interface TopupCheckResponse {
+  order_id: string;
+  code: string;
+  status: "pending" | "paid" | "expired" | "canceled";
+  balance_vnd: string | null;
+  waited_ms: number;
+  message: string;
+}
+
 export interface TopupListItem {
   order_id: string;
   code: string;
@@ -330,6 +339,11 @@ export const endpoints = {
   pendingTopups: () => api.get<TopupListItem[]>("/api/v1/me/topups"),
   cancelTopup: (orderId: string) =>
     api.post<TopupListItem>(`/api/v1/me/topups/${orderId}:cancel`),
+  checkTopup: (orderId: string) =>
+    api.post<TopupCheckResponse>(`/api/v1/me/topups/${orderId}:check`, undefined, {
+      // BE đợi tối đa 12s sau khi kick worker; cho client thêm buffer.
+      timeout: 30_000,
+    }),
 
   // subscription / invoices
   subscription: () => api.get<SubscriptionRead | null>("/api/v1/me/subscription"),

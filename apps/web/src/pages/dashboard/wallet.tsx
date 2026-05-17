@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import { Plus, QrCode, X } from "lucide-react";
+import { CheckCircle2, Plus, QrCode, X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -47,6 +47,7 @@ const PENDING_TOPUPS_KEY = ["pending-topups"] as const;
 /** Subset chung dùng để render QR view (cùng TopupResponse và TopupListItem). */
 type TopupView = Pick<
   TopupListItem,
+  | "order_id"
   | "code"
   | "amount_vnd"
   | "qr_url"
@@ -192,6 +193,26 @@ function PendingTopupsCard({
     onError: (err) => toast.error(toApiError(err).detail),
   });
 
+  const check = useMutation({
+    mutationFn: async (orderId: string) =>
+      (await endpoints.checkTopup(orderId)).data,
+    onSuccess: (data) => {
+      if (data.status === "paid") {
+        toast.success(data.message);
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+        qc.invalidateQueries({ queryKey: ["wallet-tx"] });
+        qc.invalidateQueries({ queryKey: PENDING_TOPUPS_KEY });
+        qc.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+      } else if (data.status === "expired" || data.status === "canceled") {
+        toast.error(data.message);
+        qc.invalidateQueries({ queryKey: PENDING_TOPUPS_KEY });
+      } else {
+        toast.info(data.message);
+      }
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
+
   if (!loading && items.length === 0) return null;
 
   return (
@@ -238,6 +259,16 @@ function PendingTopupsCard({
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={
+                            check.isPending && check.variables === t.order_id
+                          }
+                          onClick={() => check.mutate(t.order_id)}
+                        >
+                          <CheckCircle2 aria-hidden /> Đã CK
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"
@@ -410,7 +441,34 @@ function TopupDialog() {
   );
 }
 
-function TopupQrView({ topup }: { topup: TopupView }) {
+function TopupQrView({
+  topup,
+  onPaid,
+}: {
+  topup: TopupView;
+  onPaid?: (balanceVnd: string | null) => void;
+}) {
+  const qc = useQueryClient();
+  const check = useMutation({
+    mutationFn: async () => (await endpoints.checkTopup(topup.order_id)).data,
+    onSuccess: (data) => {
+      if (data.status === "paid") {
+        toast.success(data.message);
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+        qc.invalidateQueries({ queryKey: ["wallet-tx"] });
+        qc.invalidateQueries({ queryKey: PENDING_TOPUPS_KEY });
+        qc.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
+        onPaid?.(data.balance_vnd);
+      } else if (data.status === "expired" || data.status === "canceled") {
+        toast.error(data.message);
+        qc.invalidateQueries({ queryKey: PENDING_TOPUPS_KEY });
+      } else {
+        toast.info(data.message);
+      }
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
+
   return (
     <div className="grid gap-4 md:grid-cols-[auto_1fr]">
       <div className="flex flex-col items-center gap-2">
@@ -421,9 +479,17 @@ function TopupQrView({ topup }: { topup: TopupView }) {
         />
         <Badge variant="warning">Đang chờ thanh toán…</Badge>
         <p className="max-w-[18rem] text-center text-[11px] leading-relaxed text-muted-foreground">
-          Hệ thống tự dò giao dịch ~20s/lần. Sau khi chuyển khoản, vui lòng đợi
-          tối đa 1–2 phút để ví được cộng tự động.
+          Hệ thống tự dò giao dịch ~20s/lần. Sau khi chuyển khoản xong, bấm nút
+          dưới để check ngay.
         </p>
+        <Button
+          variant="primary"
+          className="w-full"
+          loading={check.isPending}
+          onClick={() => check.mutate()}
+        >
+          <CheckCircle2 aria-hidden /> Tôi đã chuyển khoản
+        </Button>
       </div>
       <div className="space-y-3 text-sm">
         <InfoRow label="Ngân hàng" value={`${topup.bank_name} (${topup.bank_code})`} />

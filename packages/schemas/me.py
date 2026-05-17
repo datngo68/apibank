@@ -163,6 +163,25 @@ class TopupListItem(BaseModel):
     transfer_content: str
 
 
+class TopupCheckResponse(BaseModel):
+    """Kết quả của nút "Tôi đã chuyển khoản" — force-check 1 đơn topup.
+
+    - ``status``: trạng thái mới nhất sau khi đã kick poll worker và đợi
+      tối đa ``waited_ms`` ms. Có thể là ``pending`` (chưa thấy giao dịch),
+      ``paid`` (đã match + credit ví) hoặc ``expired/canceled``.
+    - ``balance_vnd``: số dư ví sau credit, chỉ có khi ``status="paid"``.
+    - ``waited_ms``: BE thực sự đã đợi bao lâu (FE dùng để hiển thị toast).
+    - ``message``: text gợi ý tiếng Việt cho FE hiển thị nhanh.
+    """
+
+    order_id: str
+    code: str
+    status: str
+    balance_vnd: Decimal | None = None
+    waited_ms: int = 0
+    message: str
+
+
 # -- Subscription / Plans ---------------------------------------------------
 
 

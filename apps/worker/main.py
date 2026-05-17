@@ -10,6 +10,7 @@ from typing import Any, cast
 from redis.asyncio import Redis
 from sqlalchemy import update
 
+from packages.banks import poll_kick
 from packages.banks.base import BankAdapter, BankAuthError, BankRateLimited
 from packages.banks.registry import (
     build_adapter,
@@ -210,93 +211,112 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
                 continue
 
     sessionmaker = get_sessionmaker()
-    while not shutdown_event.is_set():
-        try:
-            async with sessionmaker() as session:
-                cursor = await load_cursor(session, bank_account_id=account.id)
-                end = datetime.now(UTC)
-                cursor_seen = cursor.last_seen_at
-                if cursor_seen is not None and cursor_seen.tzinfo is None:
-                    cursor_seen = cursor_seen.replace(tzinfo=UTC)
-                start = (
-                    cursor_seen if cursor_seen is not None else end - timedelta(days=2)
-                )
-                start = max(start, end - timedelta(days=2))
-                last_ref = cursor.last_ref_no
-                async for bank_tx in adapter.list_transactions(account.account_no, start, end):
-                    await ingest_transaction(
-                        session, bank_account_id=account.id, bank_transaction=bank_tx
-                    )
-                    last_ref = bank_tx.bank_ref_no
-                await save_cursor(
-                    session,
-                    bank_account_id=account.id,
-                    last_seen_at=end,
-                    last_ref_no=last_ref,
-                )
-                await session.commit()
-                metrics.poll_success_total.labels(bank=account.bank_code).inc()
-                logger.debug(
-                    "poll_tick_ok", extra={"bank_account_id": account.id, "until": end.isoformat()}
-                )
-            await _update_account_status(
-                bank_account_id=account.id,
-                polling_status="running",
-                last_error=None,
-                bump_poll_at=True,
-            )
-        except BankAuthError as exc:
-            logger.warning("session_expired_relogin", extra={"bank_account_id": account.id})
-            await _update_account_status(
-                bank_account_id=account.id,
-                polling_status="auth_failed",
-                last_error=f"{type(exc).__name__}: {exc}",
-            )
+    kick_event = poll_kick.register(account.id)
+    try:
+        while not shutdown_event.is_set():
             try:
-                await adapter.login()
+                async with sessionmaker() as session:
+                    cursor = await load_cursor(session, bank_account_id=account.id)
+                    end = datetime.now(UTC)
+                    cursor_seen = cursor.last_seen_at
+                    if cursor_seen is not None and cursor_seen.tzinfo is None:
+                        cursor_seen = cursor_seen.replace(tzinfo=UTC)
+                    start = (
+                        cursor_seen if cursor_seen is not None else end - timedelta(days=2)
+                    )
+                    start = max(start, end - timedelta(days=2))
+                    last_ref = cursor.last_ref_no
+                    async for bank_tx in adapter.list_transactions(account.account_no, start, end):
+                        await ingest_transaction(
+                            session, bank_account_id=account.id, bank_transaction=bank_tx
+                        )
+                        last_ref = bank_tx.bank_ref_no
+                    await save_cursor(
+                        session,
+                        bank_account_id=account.id,
+                        last_seen_at=end,
+                        last_ref_no=last_ref,
+                    )
+                    await session.commit()
+                    metrics.poll_success_total.labels(bank=account.bank_code).inc()
+                    logger.debug(
+                        "poll_tick_ok",
+                        extra={
+                            "bank_account_id": account.id,
+                            "until": end.isoformat(),
+                        },
+                    )
                 await _update_account_status(
                     bank_account_id=account.id,
                     polling_status="running",
                     last_error=None,
-                    bump_login_at=True,
+                    bump_poll_at=True,
                 )
-            except BankAuthError as relogin_exc:
-                logger.exception(
-                    "bank_relogin_failed",
-                    extra={"bank_account_id": account.id},
-                )
-                metrics.bank_login_failure_total.labels(bank=account.bank_code).inc()
+            except BankAuthError as exc:
+                logger.warning("session_expired_relogin", extra={"bank_account_id": account.id})
                 await _update_account_status(
                     bank_account_id=account.id,
                     polling_status="auth_failed",
-                    last_error=f"{type(relogin_exc).__name__}: {relogin_exc}",
-                    audit_action="system.bank_login_failed",
+                    last_error=f"{type(exc).__name__}: {exc}",
                 )
-                # fall through tới sleep poll_interval rồi tiếp tục thử lại
-        except BankRateLimited:
-            logger.warning("rate_limited", extra={"bank_account_id": account.id})
-            await _update_account_status(
-                bank_account_id=account.id,
-                polling_status="rate_limited",
-                last_error="rate_limited",
-            )
-            await asyncio.sleep(60)
-        except Exception as exc:
-            metrics.poll_failure_total.labels(bank=account.bank_code).inc()
-            logger.exception("poll_failed", extra={"bank_account_id": account.id})
-            await _update_account_status(
-                bank_account_id=account.id,
-                polling_status="error",
-                last_error=f"{type(exc).__name__}: {exc}"[:1000],
-                audit_action="system.poll_failed",
-            )
-            await asyncio.sleep(30)
-        else:
-            await asyncio.sleep(settings.poll_interval)
-        if redis is not None:
-            # heartbeat: refresh lock (best-effort)
-            with contextlib.suppress(Exception):
-                await redis.set(f"poller:lock:{account.id}", "1", ex=120, xx=True)
+                try:
+                    await adapter.login()
+                    await _update_account_status(
+                        bank_account_id=account.id,
+                        polling_status="running",
+                        last_error=None,
+                        bump_login_at=True,
+                    )
+                except BankAuthError as relogin_exc:
+                    logger.exception(
+                        "bank_relogin_failed",
+                        extra={"bank_account_id": account.id},
+                    )
+                    metrics.bank_login_failure_total.labels(bank=account.bank_code).inc()
+                    await _update_account_status(
+                        bank_account_id=account.id,
+                        polling_status="auth_failed",
+                        last_error=f"{type(relogin_exc).__name__}: {relogin_exc}",
+                        audit_action="system.bank_login_failed",
+                    )
+                    # fall through tới sleep poll_interval rồi tiếp tục thử lại
+            except BankRateLimited:
+                logger.warning("rate_limited", extra={"bank_account_id": account.id})
+                await _update_account_status(
+                    bank_account_id=account.id,
+                    polling_status="rate_limited",
+                    last_error="rate_limited",
+                )
+                await asyncio.sleep(60)
+            except Exception as exc:
+                metrics.poll_failure_total.labels(bank=account.bank_code).inc()
+                logger.exception("poll_failed", extra={"bank_account_id": account.id})
+                await _update_account_status(
+                    bank_account_id=account.id,
+                    polling_status="error",
+                    last_error=f"{type(exc).__name__}: {exc}"[:1000],
+                    audit_action="system.poll_failed",
+                )
+                await asyncio.sleep(30)
+            else:
+                # Đợi tới poll_interval HOẶC khi kick (nút "Tôi đã chuyển khoản"
+                # / API publish bank:poll:kick) để wake sớm.
+                kick_event.clear()
+                try:
+                    await asyncio.wait_for(
+                        kick_event.wait(), timeout=settings.poll_interval
+                    )
+                    logger.info(
+                        "poll_kicked_early", extra={"bank_account_id": account.id}
+                    )
+                except TimeoutError:
+                    pass
+            if redis is not None:
+                # heartbeat: refresh lock (best-effort)
+                with contextlib.suppress(Exception):
+                    await redis.set(f"poller:lock:{account.id}", "1", ex=120, xx=True)
+    finally:
+        poll_kick.unregister(account.id)
 
 
 async def _supervised(account: BankAccount, *, redis: Redis | None) -> None:
@@ -413,6 +433,9 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
     kick_task = asyncio.create_task(
         _account_kick_listener(local_stop), name="bank-account-kick"
     )
+    poll_kick_task = asyncio.create_task(
+        poll_kick.listen(local_stop), name="poll-kick-listener"
+    )
 
     try:
         while not local_stop.is_set():
@@ -427,10 +450,11 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
                 logger.exception("reconcile_accounts_failed")
     finally:
         kick_task.cancel()
+        poll_kick_task.cancel()
         for task in tasks.values():
             task.cancel()
         await asyncio.gather(
-            kick_task, *tasks.values(), return_exceptions=True
+            kick_task, poll_kick_task, *tasks.values(), return_exceptions=True
         )
         if redis is not None:
             await redis.aclose()

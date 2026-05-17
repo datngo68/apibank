@@ -19,6 +19,14 @@ Tuân theo [keep-a-changelog](https://keepachangelog.com).
 
 ### Added
 
+- **Nút "Tôi đã chuyển khoản"** trong dialog QR và bảng "Đơn nạp đang chờ":
+  bấm để force-check ngay thay vì đợi worker poll tick kế. Tốc độ phản hồi
+  ~1–3s thay vì trung bình 10–20s. Backend endpoint mới
+  `POST /api/v1/me/topups/{order_id}:check` kick worker poll loop qua Redis
+  pub/sub `bank:poll:kick` (in-process fallback khi Redis down) rồi đợi
+  tối đa 12s. Worker đổi `asyncio.sleep(poll_interval)` thành
+  `asyncio.wait_for(kick_event.wait(), …)` để wake sớm. Thêm
+  `packages/banks/poll_kick.py` chứa register/unregister/kick/listen.
 - **In-app notifications**: bảng `notifications` đã có; thêm route `/api/v1/me/notifications` (list, unread-count, mark-read, read-all) + `NotificationBell` ở dashboard layout (poll mỗi 30s).
 - **Dispatcher producer wiring**:
   - `core/ingest.py` → `topup_credited` sau khi credit ví.
