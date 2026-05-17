@@ -1,0 +1,43 @@
+# Override để build image local thay vì pull từ ghcr.io.
+#
+# Sử dụng (tự build từ source code, mất 5-15 phút lần đầu):
+#   docker compose --env-file .env \
+#       -f infra/docker/docker-compose.yml \
+#       -f infra/docker/docker-compose.build.yml \
+#       up -d --build
+#
+# Khi nào cần:
+# - Sửa code locally và muốn test ngay không qua tag/push.
+# - Network ra ghcr.io chậm/bị chặn.
+# - Muốn test 1 commit chưa được tag.
+
+services:
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: apibank:local
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: apibank:local
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: apibank:local
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: apibank:local
+
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: apibank-caddy:local

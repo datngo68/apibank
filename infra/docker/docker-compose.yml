@@ -1,10 +1,19 @@
-# Production-grade docker-compose cho APIBank.
+# Production docker-compose cho APIBank.
+#
+# Image: pull từ ghcr.io theo `APIBANK_IMAGE_TAG` (mặc định `latest`).
+# Tag được CI release.yml build và push tự động khi git tag `v*.*.*`.
 #
 # Sử dụng:
 #   cp infra/docker/.env.production.example .env
 #   # chỉnh .env với domain, password, Cloudflare token...
-#   bash infra/docker/bootstrap.sh         # sinh secret + tạo admin (1 lần)
-#   docker compose -f infra/docker/docker-compose.yml up -d
+#   bash infra/docker/bootstrap.sh             # sinh secret + tạo admin (1 lần)
+#   docker compose --env-file .env -f infra/docker/docker-compose.yml pull
+#   docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
+#
+# Build local thay vì pull (ví dụ test code chưa tag):
+#   docker compose --env-file .env \
+#     -f infra/docker/docker-compose.yml \
+#     -f infra/docker/docker-compose.build.yml up -d --build
 #
 # Stack: caddy (Cloudflare DNS-01) → api → postgres + redis.
 # worker + scheduler là process riêng (KHÔNG dùng APIBANK_EMBED_WORKERS) để
@@ -12,10 +21,7 @@
 
 services:
   migrate:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
-    image: apibank:latest
+    image: ghcr.io/datngo68/apibank:${APIBANK_IMAGE_TAG:-latest}
     env_file: ../../.env
     command: ["python", "-m", "alembic", "upgrade", "head"]
     restart: "no"
@@ -24,10 +30,7 @@ services:
         condition: service_healthy
 
   api:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
-    image: apibank:latest
+    image: ghcr.io/datngo68/apibank:${APIBANK_IMAGE_TAG:-latest}
     env_file: ../../.env
     environment:
       APIBANK_EMBED_WORKERS: "0"
@@ -49,10 +52,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
-    image: apibank:latest
+    image: ghcr.io/datngo68/apibank:${APIBANK_IMAGE_TAG:-latest}
     env_file: ../../.env
     command: ["python", "-m", "apps.worker.main"]
     depends_on:
@@ -63,10 +63,7 @@ services:
     restart: unless-stopped
 
   scheduler:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile
-    image: apibank:latest
+    image: ghcr.io/datngo68/apibank:${APIBANK_IMAGE_TAG:-latest}
     env_file: ../../.env
     command: ["python", "-m", "apps.scheduler.main"]
     depends_on:
@@ -77,10 +74,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    build:
-      context: ./caddy
-      dockerfile: Dockerfile
-    image: apibank-caddy:latest
+    image: ghcr.io/datngo68/apibank-caddy:${APIBANK_IMAGE_TAG:-latest}
     ports:
       - "443:443"
       - "443:443/udp"  # HTTP/3

@@ -6,26 +6,35 @@
 # Việc:
 #   1. Sinh secrets ngẫu nhiên (Fernet, api_key_salt, session_secret_key)
 #      và inject vào .env nếu vẫn còn placeholder CHANGE_ME.
-#   2. Build image apibank:latest.
+#   2. Pull image từ ghcr.io (mặc định) hoặc build local nếu set USE_BUILD=1.
 #   3. Chạy migration (service `migrate` của compose).
 #   4. Seed plans mặc định + tạo admin user (tương tác).
 #
 # Idempotent: chạy lại không phá secret đã sinh.
 #
 # Cách dùng:
-#   bash infra/docker/bootstrap.sh
+#   bash infra/docker/bootstrap.sh                  # pull từ ghcr.io
+#   USE_BUILD=1 bash infra/docker/bootstrap.sh      # build local từ source
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/infra/docker/docker-compose.yml"
+BUILD_OVERRIDE="$REPO_ROOT/infra/docker/docker-compose.build.yml"
 ENV_FILE="$REPO_ROOT/.env"
 ENV_TEMPLATE="$REPO_ROOT/infra/docker/.env.production.example"
 
+USE_BUILD="${USE_BUILD:-0}"
+
 # Compose file ở subdir nên không tự load .env ở repo root.
-# Wrap để mọi lệnh compose đều dùng đúng env file.
+# Wrap để mọi lệnh compose đều dùng đúng env file (+ build override khi cần).
 dc() {
-    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+    if [[ "$USE_BUILD" == "1" ]]; then
+        docker compose --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE" -f "$BUILD_OVERRIDE" "$@"
+    else
+        docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+    fi
 }
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
@@ -124,12 +133,15 @@ if [[ $MISSING -eq 1 ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Step 4: build + migrate
+# Step 4: pull/build + migrate
 # -----------------------------------------------------------------------------
-bold "→ Build image apibank:latest (có thể mất vài phút lần đầu)..."
-# --no-cache cho migrate để chắc chắn schema mới được apply (cache layer
-# COPY alembic có thể giữ phiên bản cũ nếu file không đổi mtime).
-dc build migrate api worker scheduler caddy
+if [[ "$USE_BUILD" == "1" ]]; then
+    bold "→ Build image local từ source (có thể mất vài phút lần đầu)..."
+    dc build migrate api worker scheduler caddy
+else
+    bold "→ Pull image từ ghcr.io (~30s nếu mạng tốt)..."
+    dc pull migrate api worker scheduler caddy
+fi
 
 bold "→ Khởi động postgres + redis..."
 dc up -d postgres redis
