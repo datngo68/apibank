@@ -121,7 +121,7 @@ class WalletTransactionRead(BaseModel):
 
 
 class TopupCreateRequest(BaseModel):
-    amount_vnd: int = Field(ge=10_000, le=50_000_000)
+    amount_vnd: int = Field(ge=2_000, le=50_000_000)
 
 
 class TopupResponse(BaseModel):

@@ -41,7 +41,7 @@ import {
 import { formatVnd, formatDateTime } from "@/lib/utils";
 import { AUTH_QUERY_KEY } from "@/lib/auth";
 
-const PRESETS = [50_000, 100_000, 200_000, 500_000];
+const PRESETS = [2_000, 50_000, 100_000, 500_000];
 const PENDING_TOPUPS_KEY = ["pending-topups"] as const;
 
 /** Subset chung dùng để render QR view (cùng TopupResponse và TopupListItem). */
@@ -289,7 +289,7 @@ function PendingTopupsCard({
 
 function TopupDialog() {
   const [open, setOpen] = useState(false);
-  const [amount, setAmount] = useState<number>(100_000);
+  const [amount, setAmount] = useState<number>(2_000);
   const [topup, setTopup] = useState<TopupResponse | null>(null);
   const qc = useQueryClient();
 
@@ -382,7 +382,7 @@ function TopupDialog() {
             </div>
             <input
               type="number"
-              min={10_000}
+              min={2_000}
               max={50_000_000}
               step={1_000}
               value={amount}
@@ -401,7 +401,7 @@ function TopupDialog() {
         {!topup ? (
           <DialogFooter>
             <p className="text-xs text-muted-foreground">
-              Số tiền tối thiểu 10.000 đ — tối đa 50.000.000 đ.
+              Số tiền tối thiểu 2.000 đ — tối đa 50.000.000 đ.
             </p>
           </DialogFooter>
         ) : null}

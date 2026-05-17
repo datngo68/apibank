@@ -18,7 +18,7 @@ from packages.db.models import BankAccount, Order, User, utcnow
 
 TOPUP_KIND: Final = "topup"
 TOPUP_TTL_SECONDS: Final = 24 * 60 * 60  # 24h
-MIN_TOPUP_VND: Final = Decimal(10_000)
+MIN_TOPUP_VND: Final = Decimal(2_000)
 MAX_TOPUP_VND: Final = Decimal(50_000_000)
 
 

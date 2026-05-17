@@ -62,7 +62,7 @@ async def test_topup_amount_bounds(initialized_db: AsyncSession) -> None:
     user = await _make_user(initialized_db)
     await _make_system_bank(initialized_db)
     with pytest.raises(ValueError):
-        await topup.create_topup_order(initialized_db, user=user, amount_vnd=5_000)
+        await topup.create_topup_order(initialized_db, user=user, amount_vnd=1_000)
     with pytest.raises(ValueError):
         await topup.create_topup_order(initialized_db, user=user, amount_vnd=100_000_000)
 
