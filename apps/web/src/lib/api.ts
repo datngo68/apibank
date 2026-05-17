@@ -287,6 +287,8 @@ export const endpoints = {
   }) => api.post<BankAccount>("/api/v1/me/bank-accounts", body),
   rotateBank: (id: string, body: { username: string; password: string }) =>
     api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/rotate`, body),
+  verifyBank: (id: string) =>
+    api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/verify`),
   deleteBank: (id: string) => api.delete(`/api/v1/me/bank-accounts/${id}`),
 
   // webhooks

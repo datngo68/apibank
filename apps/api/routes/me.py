@@ -188,6 +188,89 @@ async def create_bank_account(
 
 
 @router.post(
+    "/bank-accounts/{bank_account_id}/verify", response_model=BankAccountRead
+)
+async def verify_bank_account(
+    bank_account_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> BankAccountRead:
+    """Thử login bank ngay với credential đã lưu.
+
+    Nếu OK: set ``verified_at = now``, trả 200 + bank record (UI hiện tích xanh).
+    Nếu fail: lưu ``last_error``, trả 422 với chi tiết để user sửa credential.
+    """
+    from packages.banks.base import BankAuthError, BankRateLimited
+    from packages.banks.registry import build_adapter, decode_credentials
+
+    cipher = _require_cipher()
+    account = await _get_user_bank(session, user, bank_account_id)
+    try:
+        username, password = decode_credentials(account, cipher=cipher)
+        adapter = build_adapter(
+            bank_code=account.bank_code, username=username, password=password
+        )
+        await adapter.login()
+    except BankAuthError as exc:
+        account.verified_at = None
+        account.polling_status = "auth_failed"
+        account.last_error = f"{type(exc).__name__}: {exc}"
+        await record_audit(
+            session,
+            actor=user.id,
+            action="bank.verify_failed",
+            target_type="bank_account",
+            target_id=account.id,
+            ip=request.client.host if request.client else None,
+            after={"error": account.last_error},
+        )
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Đăng nhập thất bại: {exc}",
+        ) from exc
+    except BankRateLimited as exc:
+        account.last_error = "rate_limited"
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Bank đang rate-limit; thử lại sau 60s.",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        account.verified_at = None
+        account.last_error = f"{type(exc).__name__}: {exc}"[:500]
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Không kết nối được bank: {exc}",
+        ) from exc
+
+    now = datetime.now(UTC)
+    account.verified_at = now
+    account.last_login_at = now
+    account.last_error = None
+    account.polling_status = "running"
+    await record_audit(
+        session,
+        actor=user.id,
+        action="bank.verify_ok",
+        target_type="bank_account",
+        target_id=account.id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    # Kick worker re-pickup (nếu trước đó đang ở auth_failed → running).
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish("bank:account:added", account.id)
+    except Exception:  # noqa: BLE001
+        pass
+    return BankAccountRead.model_validate(account, from_attributes=True)
+
+
+@router.post(
     "/bank-accounts/{bank_account_id}/rotate", response_model=BankAccountRead
 )
 async def rotate_bank_credentials(

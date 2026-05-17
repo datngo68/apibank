@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle2, ShieldCheck } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -105,6 +105,15 @@ function BankCard({ bank }: { bank: BankAccount }) {
     },
     onError: (err) => toast.error(toApiError(err).detail),
   });
+  const verify = useMutation({
+    mutationFn: () => endpoints.verifyBank(bank.id),
+    onSuccess: () => {
+      toast.success("Kết nối ngân hàng thành công");
+      qc.invalidateQueries({ queryKey: ["banks"] });
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
+  const isVerified = !!bank.verified_at;
 
   return (
     <Card>
@@ -113,6 +122,16 @@ function BankCard({ bank }: { bank: BankAccount }) {
           <div>
             <CardTitle className="flex items-center gap-2">
               {bank.bank_code}
+              {isVerified ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success"
+                  title={`Đã verify ${formatDateTime(bank.verified_at!)}`}
+                >
+                  <CheckCircle2 className="size-3.5" aria-hidden /> Đã liên kết
+                </span>
+              ) : (
+                <Badge variant="muted">Chưa verify</Badge>
+              )}
               <Badge variant="muted">{bank.status}</Badge>
             </CardTitle>
             <CardDescription className="font-mono">{bank.account_no}</CardDescription>
@@ -134,16 +153,22 @@ function BankCard({ bank }: { bank: BankAccount }) {
         <div className="text-xs text-muted-foreground">
           Lần poll cuối: {bank.last_poll_at ? relativeTime(bank.last_poll_at) : "—"}
         </div>
-        {bank.verified_at ? (
-          <div className="text-xs text-success">Đã verify · {formatDateTime(bank.verified_at)}</div>
-        ) : null}
         {bank.last_error ? (
           <Alert variant="destructive">
             <AlertTitle>Có lỗi</AlertTitle>
             <AlertDescription>{bank.last_error}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex justify-end pt-2">
+        <div className="flex items-center justify-between gap-2 pt-2">
+          <Button
+            variant={isVerified ? "outline" : "primary"}
+            size="sm"
+            loading={verify.isPending}
+            onClick={() => verify.mutate()}
+          >
+            <ShieldCheck aria-hidden />
+            {isVerified ? "Kiểm tra lại" : "Liên kết & kiểm tra"}
+          </Button>
           <Button
             variant="ghost"
             size="sm"
