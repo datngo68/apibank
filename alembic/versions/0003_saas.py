@@ -111,7 +111,7 @@ def upgrade() -> None:
         sa.Column("monthly_quota", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("features_json", sa.JSON(), nullable=False),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_plans_code", "plans", ["code"], unique=True)
@@ -125,7 +125,7 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, server_default="active"),
-        sa.Column("auto_renew", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("auto_renew", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
@@ -200,7 +200,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(64), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("kind", sa.String(64), nullable=False),
         sa.Column("channel", sa.String(16), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("user_id", "kind", "channel", name="uq_pref_user_kind_channel"),
     )
@@ -210,7 +210,7 @@ def upgrade() -> None:
     with op.batch_alter_table("bank_accounts") as batch:
         batch.add_column(sa.Column("user_id", sa.String(64), nullable=True))
         batch.add_column(
-            sa.Column("is_system_account", sa.Boolean(), nullable=False, server_default=sa.text("0"))
+            sa.Column("is_system_account", sa.Boolean(), nullable=False, server_default=sa.text("false"))
         )
         batch.add_column(
             sa.Column("polling_status", sa.String(16), nullable=False, server_default="idle")
