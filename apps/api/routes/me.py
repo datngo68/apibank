@@ -177,6 +177,13 @@ async def create_bank_account(
         after={"bank_code": account.bank_code, "account_no": account.account_no},
     )
     await session.commit()
+    # Kick worker rescan để pickup bank mới ngay (best-effort, no-op nếu Redis down).
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish("bank:account:added", account.id)
+    except Exception:  # noqa: BLE001
+        pass
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
@@ -204,6 +211,13 @@ async def rotate_bank_credentials(
         ip=request.client.host if request.client else None,
     )
     await session.commit()
+    # Kick worker để re-login với credential mới ngay.
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish("bank:account:added", account.id)
+    except Exception:  # noqa: BLE001
+        pass
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
@@ -240,6 +254,13 @@ async def delete_bank_account(
         ip=request.client.host if request.client else None,
     )
     await session.commit()
+    # Kick worker để cancel poll task của bank vừa xoá.
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish("bank:account:added", account.id)
+    except Exception:  # noqa: BLE001
+        pass
     return GenericMessage(message="deleted")
 
 

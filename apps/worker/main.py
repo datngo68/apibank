@@ -311,8 +311,52 @@ async def _supervised(account: BankAccount, *, redis: Redis | None) -> None:
         await _poll_account(account, redis=redis)
 
 
+async def _account_kick_listener(stop: asyncio.Event) -> None:
+    """Subscribe channel ``bank:account:added`` để wake up rescan ngay.
+
+    Route POST /me/bank-accounts publish channel này sau commit. Worker
+    nhận message → set event để main loop rescan + spawn task mới.
+    Best-effort: nếu Redis unavailable thì sleep dài rồi exit; main loop
+    vẫn rescan định kỳ qua RESCAN_INTERVAL_SEC.
+    """
+    from packages.infra_pubsub import subscribe, wait_for_message
+
+    while not stop.is_set():
+        try:
+            async with subscribe("bank:account:added") as pubsub:
+                if pubsub is None:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=60)
+                    except TimeoutError:
+                        continue
+                    return
+                while not stop.is_set():
+                    msg = await wait_for_message(pubsub, timeout=1.0)
+                    if msg is not None:
+                        rescan_event.set()
+        except asyncio.CancelledError:
+            return
+        except Exception:  # noqa: BLE001
+            logger.exception("bank_kick_listener_error")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=5)
+            except TimeoutError:
+                continue
+            return
+
+
+# Khoảng thời gian rescan DB tìm bank account mới (safety net khi Redis down).
+RESCAN_INTERVAL_SEC = 30
+rescan_event = asyncio.Event()
+
+
 async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
-    """Embedded entry point — gọi từ FastAPI lifespan."""
+    """Embedded entry point — gọi từ FastAPI lifespan.
+
+    Hỗ trợ thêm bank account runtime: rescan DB mỗi RESCAN_INTERVAL_SEC
+    hoặc khi nhận pub/sub ``bank:account:added``. Bank mới → spawn task
+    poll mới ngay; bank xoá/disable → cancel task tương ứng.
+    """
     global shutdown_event
 
     settings = get_settings()
@@ -329,27 +373,67 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
         redis = None
 
     local_stop = stop_event or shutdown_event
-
-    sessionmaker = get_sessionmaker()
-    async with sessionmaker() as session:
-        accounts = await list_active_accounts(session)
-
-    if not accounts:
-        logger.warning("no_active_accounts")
-        await local_stop.wait()
-        return
-
-    # Bind global shutdown event để _poll_account đọc đúng
     shutdown_event = local_stop
 
-    tasks = [asyncio.create_task(_supervised(account, redis=redis)) for account in accounts]
+    sessionmaker = get_sessionmaker()
+
+    # account_id -> task đang poll. Re-spawn khi bank thêm; cancel khi bank xoá.
+    tasks: dict[str, asyncio.Task[Any]] = {}
+
+    async def reconcile_accounts() -> None:
+        async with sessionmaker() as session:
+            current = await list_active_accounts(session)
+        wanted_ids = {a.id for a in current}
+
+        # Cancel task cho bank đã bị xoá/disable.
+        for stale_id in list(tasks.keys()):
+            if stale_id not in wanted_ids:
+                task = tasks.pop(stale_id)
+                task.cancel()
+                logger.info("account_removed", extra={"bank_account_id": stale_id})
+
+        # Spawn task cho bank mới chưa có task.
+        for account in current:
+            existing = tasks.get(account.id)
+            if existing is not None and not existing.done():
+                continue
+            task = asyncio.create_task(
+                _supervised(account, redis=redis), name=f"poll-{account.id}"
+            )
+            tasks[account.id] = task
+            logger.info("account_added", extra={"bank_account_id": account.id})
+
+    # Initial scan.
+    await reconcile_accounts()
+    if not tasks:
+        logger.warning("no_active_accounts_yet, will rescan periodically")
+
     logger.info("worker_started", extra={"accounts": len(tasks)})
+
+    kick_task = asyncio.create_task(
+        _account_kick_listener(local_stop), name="bank-account-kick"
+    )
+
     try:
-        await local_stop.wait()
+        while not local_stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    rescan_event.wait(), timeout=RESCAN_INTERVAL_SEC
+                )
+            except TimeoutError:
+                pass
+            rescan_event.clear()
+            try:
+                await reconcile_accounts()
+            except Exception:  # noqa: BLE001
+                logger.exception("reconcile_accounts_failed")
     finally:
-        for task in tasks:
+        kick_task.cancel()
+        for task in tasks.values():
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(
+            kick_task, *tasks.values(), return_exceptions=True
+        )
         if redis is not None:
             await redis.aclose()
 
