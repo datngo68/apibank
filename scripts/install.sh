@@ -70,11 +70,12 @@ run_bootstrap() {
 # -----------------------------------------------------------------------------
 start_stack() {
     bold "→ Khởi động stack..."
-    docker compose -f "$INSTALL_DIR/infra/docker/docker-compose.yml" up -d
+    docker compose --env-file "$INSTALL_DIR/.env" \
+        -f "$INSTALL_DIR/infra/docker/docker-compose.yml" up -d
     green ""
     green "Stack đang chạy. Kiểm tra:"
-    green "  docker compose -f $INSTALL_DIR/infra/docker/docker-compose.yml ps"
-    green "  docker compose -f $INSTALL_DIR/infra/docker/docker-compose.yml logs -f api"
+    green "  cd $INSTALL_DIR && docker compose --env-file .env -f infra/docker/docker-compose.yml ps"
+    green "  cd $INSTALL_DIR && docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f api"
 }
 
 main() {

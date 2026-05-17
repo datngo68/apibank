@@ -22,6 +22,12 @@ COMPOSE_FILE="$REPO_ROOT/infra/docker/docker-compose.yml"
 ENV_FILE="$REPO_ROOT/.env"
 ENV_TEMPLATE="$REPO_ROOT/infra/docker/.env.production.example"
 
+# Compose file ở subdir nên không tự load .env ở repo root.
+# Wrap để mọi lệnh compose đều dùng đúng env file.
+dc() {
+    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 green() { printf '\033[32m%s\033[0m\n' "$1"; }
 red() { printf '\033[31m%s\033[0m\n' "$1"; }
@@ -121,19 +127,19 @@ fi
 # Step 4: build + migrate
 # -----------------------------------------------------------------------------
 bold "→ Build image apibank:latest (có thể mất vài phút lần đầu)..."
-docker compose -f "$COMPOSE_FILE" build api caddy
+dc build api caddy
 
 bold "→ Khởi động postgres + redis..."
-docker compose -f "$COMPOSE_FILE" up -d postgres redis
+dc up -d postgres redis
 
 bold "→ Chạy migration..."
-docker compose -f "$COMPOSE_FILE" run --rm migrate
+dc run --rm migrate
 
 # -----------------------------------------------------------------------------
 # Step 5: seed plan + tạo admin
 # -----------------------------------------------------------------------------
 bold "→ Seed gói cước mặc định..."
-docker compose -f "$COMPOSE_FILE" run --rm \
+dc run --rm \
     --entrypoint apimb api plan seed || yellow "  (đã seed trước đó, bỏ qua)"
 
 bold "→ Tạo admin user..."
@@ -146,7 +152,7 @@ if [[ ${#ADMIN_PASS} -lt 8 ]]; then
 fi
 
 # `apimb user create` đã có flag --password → non-interactive được.
-docker compose -f "$COMPOSE_FILE" run --rm \
+dc run --rm \
     --entrypoint apimb api user create \
     --email "$ADMIN_EMAIL" \
     --password "$ADMIN_PASS" \

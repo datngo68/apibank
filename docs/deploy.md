@@ -68,9 +68,14 @@ Bootstrap sẽ:
 ## Bước 4 — Khởi động stack
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml up -d
-docker compose -f infra/docker/docker-compose.yml ps
+cd /opt/apibank
+docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker/docker-compose.yml ps
 ```
+
+> Vì `docker-compose.yml` nằm trong `infra/docker/`, compose không tự load
+> `.env` ở repo root. Cờ `--env-file .env` (chạy từ repo root) hoặc
+> `--env-file ../../.env` (chạy từ `infra/docker/`) là bắt buộc.
 
 Sau ~30 giây Caddy sẽ cấp xong Let's Encrypt cert (xem log
 `docker compose ... logs -f caddy`). Truy cập `https://your-domain` để vào
@@ -89,10 +94,10 @@ landing page. Login bằng email admin đã tạo ở bước 3.
 
 ```bash
 cd /opt/apibank
-docker compose -f infra/docker/docker-compose.yml logs -f api
-docker compose -f infra/docker/docker-compose.yml logs -f worker
-docker compose -f infra/docker/docker-compose.yml logs -f scheduler
-docker compose -f infra/docker/docker-compose.yml logs -f caddy
+docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f api
+docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f worker
+docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f scheduler
+docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f caddy
 ```
 
 ### Cập nhật phiên bản mới
@@ -100,16 +105,16 @@ docker compose -f infra/docker/docker-compose.yml logs -f caddy
 ```bash
 cd /opt/apibank
 git pull
-docker compose -f infra/docker/docker-compose.yml build api caddy
-docker compose -f infra/docker/docker-compose.yml run --rm migrate
-docker compose -f infra/docker/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker/docker-compose.yml build api caddy
+docker compose --env-file .env -f infra/docker/docker-compose.yml run --rm migrate
+docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
 ```
 
 ### Backup database
 
 ```bash
 # Snapshot tức thì
-docker compose -f infra/docker/docker-compose.yml exec -T postgres \
+docker compose --env-file .env -f infra/docker/docker-compose.yml exec -T postgres \
     pg_dump -U apibank apibank | gzip > "backup-$(date +%Y%m%d-%H%M).sql.gz"
 ```
 
@@ -118,14 +123,14 @@ Hoặc dùng [infra/scripts/backup.sh](../infra/scripts/backup.sh) đã có sẵ
 ### Restore
 
 ```bash
-gunzip < backup-2026-05-17-1200.sql.gz | docker compose -f infra/docker/docker-compose.yml \
+gunzip < backup-2026-05-17-1200.sql.gz | docker compose --env-file .env -f infra/docker/docker-compose.yml \
     exec -T postgres psql -U apibank -d apibank
 ```
 
 ### Bật stack observability (Prometheus + Grafana + Loki)
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml --profile observability up -d
+docker compose --env-file .env -f infra/docker/docker-compose.yml --profile observability up -d
 ```
 
 Grafana mặc định ở `http://<vps-ip>:3000` — nên đặt sau VPN hoặc khoá firewall
@@ -134,7 +139,7 @@ nếu không cần truy cập public.
 ### Bật node-bridge fallback (khi mbbank-lib python không work)
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml --profile fallback up -d mb-bridge
+docker compose --env-file .env -f infra/docker/docker-compose.yml --profile fallback up -d mb-bridge
 ```
 
 Sau đó set `APIBANK_MB_BRIDGE_URL=http://mb-bridge:3000` trong `.env`.
@@ -159,22 +164,22 @@ Xem log `docker compose ... logs caddy`. Lỗi phổ biến:
 ### Migration fail
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml run --rm migrate
+docker compose --env-file .env -f infra/docker/docker-compose.yml run --rm migrate
 ```
 
 Xem error chi tiết. Nếu DB schema lệch, có thể reset (mất data):
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml down
+docker compose --env-file .env -f infra/docker/docker-compose.yml down
 docker volume rm docker_pgdata
-docker compose -f infra/docker/docker-compose.yml up -d postgres
-docker compose -f infra/docker/docker-compose.yml run --rm migrate
+docker compose --env-file .env -f infra/docker/docker-compose.yml up -d postgres
+docker compose --env-file .env -f infra/docker/docker-compose.yml run --rm migrate
 ```
 
 ### Worker không poll được MB
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml logs worker | grep -E "bank_login|poll_failed"
+docker compose --env-file .env -f infra/docker/docker-compose.yml logs worker | grep -E "bank_login|poll_failed"
 ```
 
 Nếu thấy `bank_login_failed_retrying` → username/password sai hoặc MB yêu cầu OTP.
@@ -183,7 +188,7 @@ Vào dashboard → Bank accounts → cập nhật credential. Xem [docs/runbooks
 ### Quên password admin
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml run --rm \
+docker compose --env-file .env -f infra/docker/docker-compose.yml run --rm \
     --entrypoint apimb api user reset-password admin@example.com
 ```
 
