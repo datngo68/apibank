@@ -127,7 +127,9 @@ fi
 # Step 4: build + migrate
 # -----------------------------------------------------------------------------
 bold "→ Build image apibank:latest (có thể mất vài phút lần đầu)..."
-dc build api caddy
+# --no-cache cho migrate để chắc chắn schema mới được apply (cache layer
+# COPY alembic có thể giữ phiên bản cũ nếu file không đổi mtime).
+dc build migrate api worker scheduler caddy
 
 bold "→ Khởi động postgres + redis..."
 dc up -d postgres redis
