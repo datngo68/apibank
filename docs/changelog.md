@@ -17,6 +17,24 @@ Tuân theo [keep-a-changelog](https://keepachangelog.com).
 - **Anti email-enumeration**: `/register` luôn trả 201, gửi email cảnh báo cho chủ tài khoản nếu trùng.
 - **Path traversal SPA**: `is_relative_to(WEB_DIST.resolve())` trước khi serve static.
 
+### Fixed
+
+- **Cấu hình hệ thống đồng bộ admin ↔ user**: thêm `resolve_telegram` /
+  `resolve_smtp` / `resolve_google_oauth` làm single-source-of-truth đọc
+  AppConfig + fallback `.env`. Trước đây `auth.py::link_user_telegram` và
+  `admin_console.py` đọc DB trực tiếp với điều kiện khác nhau → admin save
+  token mà quên bật Switch là user thấy "telegram bot not configured".
+  Giờ admin lưu `bot_token` → BE auto-set `enabled=True` (`enabled_effective
+  = payload.enabled or bool(payload.bot_token)`); user route check
+  `configured` (chỉ cần có token) thay vì `enabled`. Áp dụng cùng pattern
+  cho SMTP/Google OAuth — admin GET `/config/{smtp,google,telegram}` cũng
+  dùng resolver nên thấy `.env` fallback ngay cả khi chưa save trong UI lần
+  nào.
+- **Cache `runtime` cross-process**: `set_config` publish channel
+  `app_config:invalidate`; worker process tách subscribe (`listen_invalidations`)
+  để clear cache local ngay khi admin lưu, không phải đợi TTL 30s. Best-effort
+  — Redis down vẫn fallback TTL.
+
 ### Added
 
 - **Nút "Tôi đã chuyển khoản"** trong dialog QR và bảng "Đơn nạp đang chờ":

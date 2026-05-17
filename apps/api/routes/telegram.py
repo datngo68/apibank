@@ -38,9 +38,7 @@ async def telegram_webhook(
     session: AsyncSession = Depends(get_session),
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    cfg = await config_runtime.get_decrypted(
-        session, tg.TELEGRAM_KEY, tg.TELEGRAM_ENCRYPTED_FIELDS
-    )
+    cfg = await tg.resolve_telegram(session)
     expected_secret = cfg.get("webhook_secret") or ""
     if expected_secret and x_telegram_bot_api_secret_token != expected_secret:
         raise HTTPException(
@@ -48,7 +46,7 @@ async def telegram_webhook(
         )
 
     update = await request.json()
-    token = cfg.get("bot_token") or ""
+    token = cfg["token"]
     if not token:
         return {"ok": False, "reason": "telegram_disabled"}
 
@@ -114,9 +112,7 @@ async def _handle_message(
         return
 
     # Lệnh khác (chỉ admin chat)
-    runtime_cfg = await config_runtime.get_decrypted(
-        session, tg.TELEGRAM_KEY, tg.TELEGRAM_ENCRYPTED_FIELDS
-    )
+    runtime_cfg = await tg.resolve_telegram(session)
     if str(chat_id) != str(runtime_cfg.get("admin_chat_id") or ""):
         return
 

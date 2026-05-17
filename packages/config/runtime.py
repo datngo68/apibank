@@ -4,6 +4,13 @@ Dùng cho SMTP, Google OAuth, Telegram bot. Admin có thể chỉnh từ UI mà 
 cần restart. Hot path (login Google, send email, gửi telegram) gọi `get_decrypted`
 được phục vụ qua TTL cache 30s nội bộ.
 
+Cache cross-process:
+
+- ``set_config`` invalidate cache local + publish channel ``app_config:invalidate``.
+- Process khác (API/worker tách process) chạy ``listen_invalidations(stop)``
+  để subscribe và clear cache local khi nhận message — đảm bảo admin lưu
+  token Telegram là worker thấy ngay, không phải đợi 30s TTL hết.
+
 Quy ước key:
     smtp        {host, port, user, password_enc, from_addr, use_tls, enabled}
     google_oauth {client_id, client_secret_enc, redirect_uri, enabled}
@@ -12,6 +19,8 @@ Quy ước key:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import Iterable
 from typing import Any
@@ -22,7 +31,11 @@ from packages.config.settings import get_settings
 from packages.db.models import AppConfig, utcnow
 from packages.security.crypto import FernetCipher
 
+logger = logging.getLogger(__name__)
+
 _CACHE_TTL_SECONDS = 30.0
+_INVALIDATE_CHANNEL = "app_config:invalidate"
+_INVALIDATE_ALL = "*"
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
@@ -128,7 +141,57 @@ async def set_config(
 
     await session.flush()
     invalidate(key)
+    # Publish cross-process: API và worker process tách phải clear cache cùng lúc.
+    # Best-effort — local đã clear, fallback TTL 30s nếu Redis down.
+    try:
+        from packages.infra_pubsub import publish
+
+        await publish(_INVALIDATE_CHANNEL, key)
+    except Exception:  # noqa: BLE001
+        logger.debug("config_invalidate_publish_failed", extra={"key": key})
     return new_value
+
+
+async def listen_invalidations(stop: asyncio.Event) -> None:
+    """Subscribe channel ``app_config:invalidate`` để clear cache cross-process.
+
+    Worker process (tách khỏi API) gọi hàm này trong background. Mỗi message
+    là 1 ``key`` để invalidate (hoặc ``*`` để clear toàn bộ). Best-effort:
+    nếu Redis unavailable thì task ngủ rồi exit; cache vẫn auto-expire sau
+    TTL 30s nên không stale lâu.
+    """
+    from packages.infra_pubsub import subscribe, wait_for_message
+
+    while not stop.is_set():
+        try:
+            async with subscribe(_INVALIDATE_CHANNEL) as pubsub:
+                if pubsub is None:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=60)
+                    except TimeoutError:
+                        continue
+                    return
+                while not stop.is_set():
+                    msg = await wait_for_message(pubsub, timeout=1.0)
+                    if msg is None:
+                        continue
+                    raw = msg.get("data")
+                    key = (
+                        raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                    )
+                    if not key or key == _INVALIDATE_ALL:
+                        invalidate()
+                    else:
+                        invalidate(key)
+        except asyncio.CancelledError:
+            return
+        except Exception:  # noqa: BLE001
+            logger.exception("config_invalidate_listener_error")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=5)
+            except TimeoutError:
+                continue
+            return
 
 
 def public_view(
@@ -154,5 +217,6 @@ __all__ = [
     "get_decrypted",
     "set_config",
     "invalidate",
+    "listen_invalidations",
     "public_view",
 ]

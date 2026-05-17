@@ -66,6 +66,7 @@ from packages.schemas.admin import (
     WalletOpResponse,
 )
 from packages.schemas.auth import GenericMessage
+from packages.security import oauth_google
 from packages.security.audit import record_audit
 from packages.security.email_tokens import KIND_RESET, issue_email_token
 from packages.security.tokens import generate_token, hash_token
@@ -801,16 +802,16 @@ async def get_smtp_config(
     _: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> SmtpConfigRead:
-    raw = await config_runtime.get_config(session, SMTP_KEY)
-    pub = config_runtime.public_view(raw, SMTP_ENC_FIELDS)
+    # Dùng resolver để FE thấy ``.env`` SMTP nếu chưa save trong UI lần nào.
+    resolved = await email_pkg.resolve_smtp(session)
     return SmtpConfigRead(
-        host=pub.get("host", ""),
-        port=int(pub.get("port", 587) or 587),
-        user=pub.get("user", ""),
-        from_addr=pub.get("from_addr", ""),
-        use_tls=bool(pub.get("use_tls", True)),
-        enabled=bool(pub.get("enabled", False)),
-        password_set=bool(pub.get("password_set", False)),
+        host=resolved["host"],
+        port=int(resolved["port"]),
+        user=resolved["user"],
+        from_addr=resolved["from_addr"] or "",
+        use_tls=bool(resolved["use_tls"]),
+        enabled=bool(resolved["enabled"]),
+        password_set=bool(resolved["password_set"]),
     )
 
 
@@ -877,13 +878,12 @@ async def get_google_config(
     _: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> GoogleConfigRead:
-    raw = await config_runtime.get_config(session, GOOGLE_KEY)
-    pub = config_runtime.public_view(raw, GOOGLE_ENC_FIELDS)
+    resolved = await oauth_google.resolve_google_oauth(session)
     return GoogleConfigRead(
-        client_id=pub.get("client_id", ""),
-        redirect_uri=pub.get("redirect_uri", ""),
-        enabled=bool(pub.get("enabled", False)),
-        client_secret_set=bool(pub.get("client_secret_set", False)),
+        client_id=resolved["client_id"],
+        redirect_uri=resolved["redirect_uri"],
+        enabled=bool(resolved["enabled"]),
+        client_secret_set=bool(resolved["client_secret_set"]),
     )
 
 
@@ -936,12 +936,16 @@ async def get_telegram_config(
 ) -> TelegramConfigRead:
     raw = await config_runtime.get_config(session, TELEGRAM_KEY)
     pub = config_runtime.public_view(raw, TELEGRAM_ENC_FIELDS)
+    # Resolver biết cả `.env` fallback — đảm bảo FE nhìn thấy "đã configured"
+    # ngay cả khi instance dùng APIBANK_TELEGRAM_BOT_TOKEN từ .env (chưa save
+    # trong admin UI lần nào).
+    resolved = await tg.resolve_telegram(session)
     return TelegramConfigRead(
-        enabled=bool(pub.get("enabled", False)),
+        enabled=bool(resolved.get("enabled")),
         webhook_url=pub.get("webhook_url", ""),
-        admin_chat_id=str(pub.get("admin_chat_id") or ""),
+        admin_chat_id=str(resolved.get("admin_chat_id") or ""),
         bot_username=pub.get("bot_username", ""),
-        bot_token_set=bool(pub.get("bot_token_set", False)),
+        bot_token_set=bool(resolved.get("configured")),
     )
 
 
@@ -952,7 +956,12 @@ async def update_telegram_config(
     actor: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> TelegramConfigRead:
-    value: dict[str, Any] = {"enabled": payload.enabled}
+    # Quy ước UX: nhập token mới → tự bật `enabled` (admin gần như luôn muốn
+    # vậy; tránh tình trạng "đã save token mà user vẫn báo chưa configured"
+    # vì admin quên toggle Switch). Admin vẫn có thể tắt rõ ràng bằng
+    # ``payload.enabled = False`` nhưng kèm token rỗng.
+    enabled_effective = payload.enabled or bool(payload.bot_token)
+    value: dict[str, Any] = {"enabled": enabled_effective}
     if payload.bot_token is not None:
         value["bot_token"] = payload.bot_token
     await config_runtime.set_config(
@@ -988,7 +997,7 @@ async def update_telegram_config(
         target_type="app_config",
         target_id=TELEGRAM_KEY,
         ip=request.client.host if request.client else None,
-        after={"enabled": payload.enabled},
+        after={"enabled": enabled_effective, "bot_token_changed": bool(payload.bot_token)},
     )
     await session.commit()
     return await get_telegram_config(actor, session)
@@ -1004,10 +1013,8 @@ async def register_telegram_webhook(
     actor: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> TelegramRegisterWebhookResponse:
-    cfg = await config_runtime.get_decrypted(
-        session, TELEGRAM_KEY, TELEGRAM_ENC_FIELDS
-    )
-    token = cfg.get("bot_token") or ""
+    cfg = await tg.resolve_telegram(session)
+    token = cfg["token"]
     if not token:
         raise HTTPException(status_code=400, detail="bot token not set")
     base = payload.base_url.rstrip("/")
@@ -1050,10 +1057,8 @@ async def delete_telegram_webhook(
     actor: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> GenericMessage:
-    cfg = await config_runtime.get_decrypted(
-        session, TELEGRAM_KEY, TELEGRAM_ENC_FIELDS
-    )
-    token = cfg.get("bot_token") or ""
+    cfg = await tg.resolve_telegram(session)
+    token = cfg["token"]
     if token:
         await tg.delete_webhook(token)
     cfg_raw = await config_runtime.get_config(session, TELEGRAM_KEY)
@@ -1083,15 +1088,13 @@ async def link_telegram_chat(
     actor: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> TelegramLinkChatResponse:
-    cfg = await config_runtime.get_decrypted(
-        session, TELEGRAM_KEY, TELEGRAM_ENC_FIELDS
-    )
-    if not cfg.get("bot_token"):
+    cfg = await tg.resolve_telegram(session)
+    if not cfg["configured"]:
         raise HTTPException(status_code=400, detail="bot token not set")
     bot_username = cfg.get("bot_username") or ""
     if not bot_username:
         # Fetch lại nếu thiếu
-        info = await tg.get_me(cfg["bot_token"])
+        info = await tg.get_me(cfg["token"])
         if info.get("ok"):
             bot_username = (info.get("result") or {}).get("username") or ""
             cfg_raw = await config_runtime.get_config(session, TELEGRAM_KEY)

@@ -28,8 +28,14 @@ SMTP_KEY = "smtp"
 SMTP_ENCRYPTED_FIELDS = ("password",)
 
 
-async def _resolve_smtp(session: AsyncSession | None) -> dict[str, Any]:
-    """Đọc cấu hình SMTP. Ưu tiên AppConfig (admin chỉnh từ UI), fallback `.env`."""
+async def resolve_smtp(session: AsyncSession | None) -> dict[str, Any]:
+    """Đọc cấu hình SMTP. Ưu tiên AppConfig (admin chỉnh từ UI), fallback `.env`.
+
+    Trả ``{host, port, user, password, from_addr, use_tls, enabled,
+    configured, password_set, source}``. ``configured = bool(host)`` —
+    tách khỏi `enabled` để admin/UI biết "đã có host nhưng chưa bật" và
+    "chưa cấu hình gì".
+    """
     runtime_cfg: dict[str, Any] = {}
     if session is not None:
         runtime_cfg = await config_runtime.get_decrypted(
@@ -42,7 +48,7 @@ async def _resolve_smtp(session: AsyncSession | None) -> dict[str, Any]:
                 s, SMTP_KEY, SMTP_ENCRYPTED_FIELDS
             )
 
-    if runtime_cfg.get("enabled") and runtime_cfg.get("host"):
+    if runtime_cfg.get("host"):
         return {
             "host": runtime_cfg.get("host", ""),
             "port": int(runtime_cfg.get("port", 587) or 587),
@@ -50,19 +56,38 @@ async def _resolve_smtp(session: AsyncSession | None) -> dict[str, Any]:
             "password": runtime_cfg.get("password") or "",
             "from_addr": runtime_cfg.get("from_addr") or runtime_cfg.get("user", ""),
             "use_tls": bool(runtime_cfg.get("use_tls", True)),
+            "enabled": bool(runtime_cfg.get("enabled")),
+            "configured": True,
+            "password_set": bool(runtime_cfg.get("password")),
             "source": "app_config",
         }
 
     settings = get_settings()
+    env_host = getattr(settings, "smtp_host", "") or ""
+    env_user = getattr(settings, "smtp_user", "") or ""
+    env_password = getattr(settings, "smtp_password", "") or ""
     return {
-        "host": getattr(settings, "smtp_host", "") or "",
+        "host": env_host,
         "port": int(getattr(settings, "smtp_port", 587) or 587),
-        "user": getattr(settings, "smtp_user", "") or "",
-        "password": getattr(settings, "smtp_password", "") or "",
-        "from_addr": getattr(settings, "smtp_from", "") or getattr(settings, "smtp_user", ""),
+        "user": env_user,
+        "password": env_password,
+        "from_addr": getattr(settings, "smtp_from", "") or env_user,
         "use_tls": bool(getattr(settings, "smtp_use_tls", True)),
+        # `.env` đã set host nghĩa là deploy chủ ý — bật mặc định.
+        "enabled": bool(env_host),
+        "configured": bool(env_host),
+        "password_set": bool(env_password),
         "source": "env",
     }
+
+
+async def _resolve_smtp(session: AsyncSession | None) -> dict[str, Any]:
+    """Backward-compat wrapper. Mới: dùng :func:`resolve_smtp`."""
+    cfg = await resolve_smtp(session)
+    # Hot path send_email kiểm tra ``host`` để biết có thực sự gửi được — giữ
+    # nguyên contract cũ. ``enabled=False`` từ resolver vẫn cho gửi nếu host
+    # có, vì test_smtp trước đây không yêu cầu enabled.
+    return cfg
 
 
 def _send_sync(cfg: dict[str, Any], msg: EmailMessage) -> tuple[bool, str | None]:
@@ -88,11 +113,17 @@ async def send_email(
     html: str | None = None,
     session: AsyncSession | None = None,
 ) -> bool:
-    cfg = await _resolve_smtp(session)
-    if not cfg["host"]:
+    cfg = await resolve_smtp(session)
+    if not cfg["host"] or not cfg["enabled"]:
         logger.info(
             "email_skipped_no_smtp",
-            extra={"to": to, "subject": subject, "source": cfg["source"]},
+            extra={
+                "to": to,
+                "subject": subject,
+                "source": cfg["source"],
+                "configured": cfg["configured"],
+                "enabled": cfg["enabled"],
+            },
         )
         return False
 
@@ -115,7 +146,7 @@ async def send_email_test(
     *, to: str, session: AsyncSession
 ) -> tuple[bool, str | None]:
     """Gửi 1 email test cho admin, trả `(ok, error_message)`."""
-    cfg = await _resolve_smtp(session)
+    cfg = await resolve_smtp(session)
     if not cfg["host"]:
         return False, "SMTP chưa được cấu hình (thiếu host)."
 

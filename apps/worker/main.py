@@ -19,6 +19,7 @@ from packages.banks.registry import (
     load_cursor,
     save_cursor,
 )
+from packages.config import runtime as config_runtime
 from packages.config.settings import get_settings
 from packages.core.ingest import ingest_transaction
 from packages.db.models import BankAccount
@@ -436,6 +437,10 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
     poll_kick_task = asyncio.create_task(
         poll_kick.listen(local_stop), name="poll-kick-listener"
     )
+    config_invalidate_task = asyncio.create_task(
+        config_runtime.listen_invalidations(local_stop),
+        name="config-invalidate-listener",
+    )
 
     try:
         while not local_stop.is_set():
@@ -451,10 +456,15 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
     finally:
         kick_task.cancel()
         poll_kick_task.cancel()
+        config_invalidate_task.cancel()
         for task in tasks.values():
             task.cancel()
         await asyncio.gather(
-            kick_task, poll_kick_task, *tasks.values(), return_exceptions=True
+            kick_task,
+            poll_kick_task,
+            config_invalidate_task,
+            *tasks.values(),
+            return_exceptions=True,
         )
         if redis is not None:
             await redis.aclose()

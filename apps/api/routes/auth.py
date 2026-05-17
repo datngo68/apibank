@@ -799,15 +799,16 @@ async def link_user_telegram(
         hash_token as _hash_token,
     )
 
-    cfg = await _runtime.get_decrypted(session, _tg.TELEGRAM_KEY, _tg.TELEGRAM_ENCRYPTED_FIELDS)
-    if not cfg.get("bot_token") or not cfg.get("enabled"):
+    cfg = await _tg.resolve_telegram(session)
+    if not cfg["configured"]:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="telegram bot not configured",
         )
+    token = cfg["token"]
     bot_username = cfg.get("bot_username") or ""
     if not bot_username:
-        info = await _tg.get_me(cfg["bot_token"])
+        info = await _tg.get_me(token)
         if info.get("ok"):
             bot_username = (info.get("result") or {}).get("username") or ""
             cfg_raw = await _runtime.get_config(session, _tg.TELEGRAM_KEY)

@@ -106,10 +106,48 @@ async def test_link_chat_requires_auth(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_link_chat_503_when_telegram_disabled(
+async def test_link_chat_503_when_telegram_not_configured(
     client: httpx.AsyncClient,
 ) -> None:
-    """Disable telegram trong DB → endpoint trả 503."""
+    """Khi chưa có bot_token → endpoint trả 503.
+
+    Lưu ý: chỉ cần ``bot_token`` là user link được — không phụ thuộc admin
+    có toggle ``enabled`` hay không. Test cũ kiểm tra ``enabled=False`` đã
+    sai semantic mới và bị xoá; thay bằng test này.
+    """
+    import packages.db.session as session_module
+    from packages.config import runtime as runtime_module
+
+    sm = session_module.get_sessionmaker()
+    async with sm() as s:
+        # Xoá hẳn token (preserve_empty_secrets=False) để mô phỏng "chưa cấu hình".
+        await runtime_module.set_config(
+            s,
+            "telegram",
+            {"enabled": False, "bot_token": None, "bot_username": ""},
+            actor_id="seed",
+            encrypt_fields=("bot_token",),
+            preserve_empty_secrets=False,
+        )
+        await s.commit()
+    runtime_module.invalidate()
+
+    await _register_login(client)
+    res = await client.post(
+        "/api/v1/auth/profile/telegram/link-chat", headers=_csrf(client)
+    )
+    assert res.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_link_chat_works_when_token_set_but_enabled_false(
+    client: httpx.AsyncClient,
+) -> None:
+    """Admin đã save token nhưng chưa bật Switch — user vẫn link được.
+
+    Đây là root cause user báo "đã add token mà vẫn báo chưa có": code cũ
+    yêu cầu ``cfg.get("enabled")``, nay chỉ cần ``configured``.
+    """
     import packages.db.session as session_module
     from packages.config import runtime as runtime_module
 
@@ -121,6 +159,105 @@ async def test_link_chat_503_when_telegram_disabled(
             {"enabled": False, "bot_username": "apibank_test_bot"},
             actor_id="seed",
             encrypt_fields=("bot_token",),
+        )
+        await s.commit()
+    runtime_module.invalidate()
+
+    await _register_login(client)
+    res = await client.post(
+        "/api/v1/auth/profile/telegram/link-chat", headers=_csrf(client)
+    )
+    assert res.status_code == 200, res.text
+
+
+@pytest.mark.asyncio
+async def test_admin_save_token_auto_enables(
+    client: httpx.AsyncClient,
+) -> None:
+    """Admin save bot_token với enabled=False → BE auto-bật để tránh trap UX."""
+    import packages.db.session as session_module
+    from packages.config import runtime as runtime_module
+    from packages.db.models import User
+    from packages.notifications import telegram as tg_pkg
+    from packages.security.passwords import hash_password
+
+    # Tạo admin user
+    sm = session_module.get_sessionmaker()
+    async with sm() as s:
+        admin = User(
+            email="admin@a.com",
+            password_hash=hash_password("Strong-Pass-1"),
+            full_name="Admin",
+            role="admin",
+            status="active",
+        )
+        s.add(admin)
+        # reset cấu hình về trống
+        await runtime_module.set_config(
+            s,
+            "telegram",
+            {"enabled": False, "bot_token": None, "bot_username": ""},
+            actor_id="seed",
+            encrypt_fields=("bot_token",),
+            preserve_empty_secrets=False,
+        )
+        await s.commit()
+    runtime_module.invalidate()
+
+    # Login admin
+    await client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@a.com", "password": "Strong-Pass-1"},
+        headers=_csrf(client),
+    )
+
+    # Patch get_me để không gọi Telegram API thật
+    async def _fake_get_me(token: str):  # type: ignore[no-untyped-def]
+        return {"ok": True, "result": {"username": "apibank_test_bot"}}
+
+    real_get_me = tg_pkg.get_me
+    tg_pkg.get_me = _fake_get_me  # type: ignore[assignment]
+    try:
+        # Admin save token với enabled=False
+        res = await client.put(
+            "/api/v1/admin/config/telegram",
+            json={"enabled": False, "bot_token": "987654:new-token"},
+            headers=_csrf(client),
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        # BE auto-bật vì có token mới
+        assert body["enabled"] is True
+        assert body["bot_token_set"] is True
+    finally:
+        tg_pkg.get_me = real_get_me  # type: ignore[assignment]
+
+    # Verify resolver thấy token đã set
+    async with sm() as s:
+        cfg = await tg_pkg.resolve_telegram(s)
+        assert cfg["configured"] is True
+        assert cfg["enabled"] is True
+        assert cfg["token"] == "987654:new-token"  # noqa: S105
+        assert cfg["source"] == "app_config"
+
+
+@pytest.mark.asyncio
+async def test_link_chat_503_when_telegram_disabled(
+    client: httpx.AsyncClient,
+) -> None:
+    """Backward-compat alias của test cũ — giờ trỏ vào case "chưa configured"."""
+    import packages.db.session as session_module
+    from packages.config import runtime as runtime_module
+
+    sm = session_module.get_sessionmaker()
+    async with sm() as s:
+        await runtime_module.set_config(
+            s,
+            "telegram",
+            {"enabled": False, "bot_token": None},
+            actor_id="seed",
+            encrypt_fields=("bot_token",),
+            preserve_empty_secrets=False,
         )
         await s.commit()
     runtime_module.invalidate()
