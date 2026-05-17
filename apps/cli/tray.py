@@ -36,6 +36,7 @@ def _build_icon_image() -> PILImage:
     size = 64
     img = Image.new("RGBA", (size, size), (255, 88, 0, 255))  # cam APIBank
     draw = ImageDraw.Draw(img)
+    font: Any
     try:
         # Windows mặc định có Segoe UI Bold
         font = ImageFont.truetype("segoeuib.ttf", 40)

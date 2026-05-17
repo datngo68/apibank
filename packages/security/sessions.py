@@ -89,7 +89,7 @@ async def revoke_session(session: AsyncSession, session_id: str) -> bool:
         .where(SessionModel.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    return (result.rowcount or 0) > 0
+    return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
 
 async def revoke_all_sessions(
@@ -105,4 +105,4 @@ async def revoke_all_sessions(
     if except_id is not None:
         stmt = stmt.where(SessionModel.id != except_id)
     result = await session.execute(stmt)
-    return int(result.rowcount or 0)
+    return int(result.rowcount or 0)  # type: ignore[attr-defined]

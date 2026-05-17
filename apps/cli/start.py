@@ -10,7 +10,7 @@ import argparse
 import sys
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "start",
         help="run API + embedded worker/scheduler/dispatcher",

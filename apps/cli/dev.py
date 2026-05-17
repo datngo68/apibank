@@ -12,7 +12,7 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[2] / "apps" / "web"
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("dev", help="run api + vite dev concurrently")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)

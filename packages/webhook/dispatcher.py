@@ -59,13 +59,13 @@ async def reset_stuck_dispatching(
         .where(WebhookAttempt.claimed_at <= threshold)
         .values(status="pending", claimed_at=None)
     )
-    if result.rowcount:
+    if result.rowcount:  # type: ignore[attr-defined]
         logger.warning(
             "webhook_dispatch_reset_stuck",
-            extra={"count": result.rowcount},
+            extra={"count": result.rowcount},  # type: ignore[attr-defined]
         )
         await session.commit()
-    return result.rowcount or 0
+    return result.rowcount or 0  # type: ignore[attr-defined]
 
 
 async def _claim_attempts(
@@ -151,7 +151,7 @@ async def _claim_attempts(
         .execution_options(synchronize_session=False)
     )
     await session.commit()
-    if not result.rowcount:
+    if not result.rowcount:  # type: ignore[attr-defined]
         return []
     # Load các row vừa claim qua claim_token. Hai dispatcher concurrent
     # sẽ có 2 token khác nhau (microsecond) → mỗi cái load đúng phần

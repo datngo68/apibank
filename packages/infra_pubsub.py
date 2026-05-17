@@ -22,9 +22,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis
 
@@ -45,7 +45,7 @@ async def _get_publisher() -> Redis | None:
         return _publisher
     try:
         client = Redis.from_url(get_settings().redis_url)
-        await client.ping()
+        await cast(Awaitable[Any], client.ping())
     except Exception as exc:  # noqa: BLE001
         logger.warning("redis_pubsub_unavailable: %s", exc)
         _publisher_unavailable = True
@@ -102,7 +102,7 @@ async def subscribe(channel: str) -> AsyncIterator[Any]:
     client: Redis | None
     try:
         client = Redis.from_url(settings.redis_url)
-        await client.ping()
+        await cast(Awaitable[Any], client.ping())
     except Exception as exc:  # noqa: BLE001
         logger.warning("redis_subscribe_unavailable: %s", exc)
         yield None
@@ -116,7 +116,7 @@ async def subscribe(channel: str) -> AsyncIterator[Any]:
         with suppress(Exception):
             await pubsub.unsubscribe(channel)
         with suppress(Exception):
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
         with suppress(Exception):
             await client.aclose()
 
@@ -141,7 +141,7 @@ async def wait_for_message(
         return None
     if msg.get("type") not in {"message", "pmessage"}:
         return None
-    return msg
+    return cast("dict[str, Any]", msg)
 
 
 __all__ = [

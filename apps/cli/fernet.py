@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("fernet", help="manage fernet keys")
     pp = p.add_subparsers(dest="action", required=True)
     gen = pp.add_parser("generate", help="print a new fernet key")

@@ -24,7 +24,7 @@ class CheckResult(NamedTuple):
 CheckFn = Callable[[], Awaitable[CheckResult]]
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("doctor", help="diagnose environment readiness")
     p.set_defaults(func=lambda args: asyncio.run(run(args)))
 

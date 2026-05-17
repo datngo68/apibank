@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -37,7 +38,7 @@ def create_app() -> FastAPI:
     init_sentry(component="api")
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop = asyncio.Event()
         tasks: list[asyncio.Task[Any]] = []
         embedded = os.getenv("APIBANK_EMBED_WORKERS") == "1"
@@ -47,7 +48,7 @@ def create_app() -> FastAPI:
 
             tasks.append(asyncio.create_task(run_poller_loop(stop), name="poller"))
             tasks.append(asyncio.create_task(start_scheduler(stop), name="scheduler"))
-            app.state.embedded_tasks = tasks  # type: ignore[attr-defined]
+            app.state.embedded_tasks = tasks
             logging.getLogger("apibank").info(
                 "embedded_workers_started",
                 extra={"count": len(tasks)},

@@ -9,7 +9,7 @@ import sys
 VERSION = "0.1.0"
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("version", help="show version info")
     p.set_defaults(func=run)
 

@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("migrate", help="run database migrations")
     p.add_argument("--target", default="head", help="alembic target (default: head)")
     p.add_argument(

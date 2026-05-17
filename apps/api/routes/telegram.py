@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
@@ -21,6 +21,9 @@ from packages.config import runtime as config_runtime
 from packages.db.models import EmailToken, Order
 from packages.db.session import get_session
 from packages.notifications import telegram as tg
+
+if TYPE_CHECKING:
+    from packages.db.models import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/telegram", tags=["telegram"], include_in_schema=False)
@@ -165,7 +168,7 @@ async def _consume_link_token(
 
 async def _consume_user_link_token(
     session: AsyncSession, raw_token: str, *, chat_id: str
-):
+) -> User | None:
     """Tìm EmailToken kind=user_tg_link, nếu hợp lệ → set User.telegram_chat_id."""
     from packages.db.models import User
     from packages.security.tokens import hash_token

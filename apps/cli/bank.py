@@ -12,7 +12,7 @@ from packages.db.session import get_sessionmaker
 from packages.security.crypto import FernetCipher
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("bank-account", help="manage bank accounts (admin)")
     pp = p.add_subparsers(dest="action", required=True)
 

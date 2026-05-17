@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
@@ -41,7 +42,9 @@ class CsrfMiddleware(BaseHTTPMiddleware):
     (/v1/*, dùng Bearer) được skip.
     """
 
-    def __init__(self, app, *, cookie_name: str = CSRF_COOKIE, secure: bool = False) -> None:
+    def __init__(
+        self, app: Any, *, cookie_name: str = CSRF_COOKIE, secure: bool = False
+    ) -> None:
         super().__init__(app)
         self._cookie_name = cookie_name
         self._secure = secure

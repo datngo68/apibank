@@ -10,7 +10,7 @@ from packages.db.session import get_sessionmaker
 from packages.security.bootstrap import create_api_key
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("api-key", help="manage API keys (admin shortcut)")
     pp = p.add_subparsers(dest="action", required=True)
 

@@ -15,7 +15,7 @@ from packages.db.session import get_sessionmaker
 from packages.security.passwords import hash_password
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("user", help="manage users")
     pp = p.add_subparsers(dest="action", required=True)
 

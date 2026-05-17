@@ -11,7 +11,7 @@ from packages.db.models import BankAccount
 from packages.db.session import get_sessionmaker
 
 
-def register(sub: argparse._SubParsersAction) -> None:
+def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("system-bank", help="manage system bank account for topup")
     pp = p.add_subparsers(dest="action", required=True)
     setp = pp.add_parser("set", help="set system bank")

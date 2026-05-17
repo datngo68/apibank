@@ -53,7 +53,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -138,7 +138,7 @@ class VietinAdapter:
             raise BankAuthError(
                 f"vietin login http {response.status_code}: {response.text[:200]}"
             )
-        return response.json()
+        return cast("dict[str, Any]", response.json())
 
     async def health(self) -> bool:
         return self._access_token is not None

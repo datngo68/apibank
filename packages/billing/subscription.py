@@ -203,7 +203,7 @@ async def expire_due_subscriptions(session: AsyncSession) -> int:
         .where(Subscription.expires_at < now)
         .values(status="expired")
     )
-    return int(result.rowcount or 0)
+    return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
 
 async def list_invoices(
