@@ -212,21 +212,42 @@ X-Signature: t=1747443600,v1=4f8b7c3a9e2d1b6a0c5f8e7d4a3b2c1d0e9f8a7b6c5d4e3f2a1
 
 ```json
 {
-  "id": "evt_01HXXXX...",
+  "id": "evt_tx_01HXXXX...",
   "type": "payment.succeeded",
   "created_at": "2026-05-17T01:05:23+00:00",
   "data": {
     "order_id": "ord_01HXXXX...",
     "transaction_id": "tx_01HXXXX...",
-    "code": "APIB7K3M2A",
+    "code": "DH7K3M2A",
     "amount_vnd": 50000,
     "bank_ref_no": "FT26137123456",
     "posted_at": "2026-05-17T01:05:20+00:00",
     "customer_ref": "user_42",
-    "metadata": {"order_internal_id": "1234", "channel": "web"}
+    "metadata": {"order_internal_id": "1234", "channel": "web"},
+    "order": {
+      "id": "ord_01HXXXX...",
+      "code": "DH7K3M2A",
+      "amount": 50000,
+      "amount_vnd": 50000,
+      "status": "paid"
+    },
+    "transaction": {
+      "id": "tx_01HXXXX...",
+      "ref": "FT26137123456",
+      "bank_ref_no": "FT26137123456",
+      "amount": 50000,
+      "amount_vnd": 50000,
+      "posted_at": "2026-05-17T01:05:20+00:00",
+      "content": "DH7K3M2A"
+    }
   }
 }
 ```
+
+> Các trường flat (`order_id`, `code`, `amount_vnd`, `customer_ref`, `metadata`,
+> `bank_ref_no`) là hình thức ưu tiên cho integrator. Các alias nested
+> (`data.order.*`, `data.transaction.*`) được giữ để backward-compat với
+> client v0; tránh dùng cho code mới.
 
 ### Verify chữ ký — bắt buộc
 

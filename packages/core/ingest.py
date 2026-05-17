@@ -281,23 +281,45 @@ async def _enqueue_webhook(
 
 
 def _build_payload(order: Order, transaction: Transaction) -> dict[str, Any]:
+    # Payload có cả flat keys (`order_id`, `code`, `amount_vnd`, `customer_ref`,
+    # `metadata`, `bank_ref_no`) lẫn nested keys (`order.*`, `transaction.*`) để
+    # client cũ và mới đều parse được. Docs ưu tiên các flat key vì dễ đọc.
+    posted_at_iso: str | None = None
+    if isinstance(transaction.posted_at, datetime):
+        posted_at_iso = transaction.posted_at.isoformat()
+    elif transaction.posted_at:
+        posted_at_iso = str(transaction.posted_at)
+
     return {
         "id": f"evt_{transaction.id}",
         "type": "payment.succeeded",
         "created_at": utcnow().isoformat(),
         "data": {
+            # Flat keys — preferred shape for integrators (matches docs).
+            "order_id": order.id,
+            "transaction_id": transaction.id,
+            "code": order.code,
+            "amount_vnd": int(order.amount_vnd),
+            "bank_ref_no": transaction.bank_ref_no,
+            "posted_at": posted_at_iso,
+            "customer_ref": order.customer_ref,
+            "metadata": order.metadata_json or {},
+            # Nested aliases — kept for backwards compatibility with v0 clients
+            # that read `data.order.code` / `data.transaction.ref`.
             "order": {
                 "id": order.id,
                 "code": order.code,
                 "amount": int(order.amount_vnd),
+                "amount_vnd": int(order.amount_vnd),
                 "status": order.status,
             },
             "transaction": {
+                "id": transaction.id,
                 "ref": transaction.bank_ref_no,
+                "bank_ref_no": transaction.bank_ref_no,
                 "amount": int(transaction.amount_vnd),
-                "posted_at": transaction.posted_at.isoformat()
-                if isinstance(transaction.posted_at, datetime)
-                else transaction.posted_at,
+                "amount_vnd": int(transaction.amount_vnd),
+                "posted_at": posted_at_iso,
                 "content": transaction.content,
             },
         },
