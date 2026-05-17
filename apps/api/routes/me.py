@@ -548,6 +548,12 @@ async def replay_attempt(
     attempt.next_run_at = utcnow()
     attempt.last_error = None
     await session.commit()
+    # Kick scheduler dispatcher để dispatch ngay (thay vì đợi tick 30s).
+    try:
+        await publish("webhook:kick", "1")
+    except Exception:  # noqa: BLE001
+        # Replay vẫn thành công — scheduler tick 30s vẫn pickup được.
+        pass
     return GenericMessage(message="queued")
 
 

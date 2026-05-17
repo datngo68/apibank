@@ -324,6 +324,10 @@ export const endpoints = {
       signature: string;
       event_id: string;
     }>(`/api/v1/me/webhooks/${id}/test`),
+  replayWebhookAttempt: (webhookId: string, attemptId: string) =>
+    api.post<{ message: string }>(
+      `/api/v1/me/webhooks/${webhookId}/attempts/${attemptId}/replay`,
+    ),
 
   // api keys
   apiKeys: () => api.get<MeApiKey[]>("/api/v1/me/api-keys"),

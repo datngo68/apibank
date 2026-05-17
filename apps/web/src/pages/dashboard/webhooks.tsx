@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Send, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Send, Trash2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -132,6 +132,15 @@ function WebhookRow({ webhook }: { webhook: WH }) {
     queryKey: ["webhook-attempts", webhook.id],
     queryFn: async () => (await endpoints.webhookAttempts(webhook.id)).data,
   });
+  const replay = useMutation({
+    mutationFn: (attemptId: string) =>
+      endpoints.replayWebhookAttempt(webhook.id, attemptId),
+    onSuccess: () => {
+      toast.success("Đã đưa vào hàng đợi gửi lại. Hệ thống sẽ retry trong vài giây.");
+      qc.invalidateQueries({ queryKey: ["webhook-attempts", webhook.id] });
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
 
   const events = webhook.events_json?.events ?? [];
 
@@ -197,17 +206,18 @@ function WebhookRow({ webhook }: { webhook: WH }) {
               <TableHead>Status</TableHead>
               <TableHead>HTTP</TableHead>
               <TableHead>Lỗi</TableHead>
+              <TableHead className="text-right">Hành động</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {attempts.isLoading ? (
               <TableRow>
-                <TableCell colSpan={4}>
+                <TableCell colSpan={5}>
                   <Skeleton className="h-6 w-full" />
                 </TableCell>
               </TableRow>
             ) : (attempts.data ?? []).length === 0 ? (
-              <TableEmpty colSpan={4}>Chưa có lần gửi nào.</TableEmpty>
+              <TableEmpty colSpan={5}>Chưa có lần gửi nào.</TableEmpty>
             ) : (
               attempts.data?.slice(0, 5).map((a: any) => (
                 <TableRow key={a.id}>
@@ -222,6 +232,22 @@ function WebhookRow({ webhook }: { webhook: WH }) {
                   <TableCell className="font-mono text-xs">{a.last_status_code ?? "—"}</TableCell>
                   <TableCell className="max-w-[20ch] truncate text-xs text-muted-foreground">
                     {a.last_error ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={replay.isPending && replay.variables === a.id}
+                      disabled={a.status === "pending" || a.status === "dispatching"}
+                      onClick={() => replay.mutate(a.id)}
+                      title={
+                        a.status === "pending" || a.status === "dispatching"
+                          ? "Đang trong hàng đợi"
+                          : "Gửi lại event này"
+                      }
+                    >
+                      <RefreshCw aria-hidden /> Gửi lại
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))
