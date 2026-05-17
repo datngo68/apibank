@@ -8,6 +8,13 @@ from pathlib import Path
 import httpx
 import pytest
 
+from apps.api.spa import INDEX_HTML
+
+requires_spa_build = pytest.mark.skipif(
+    not INDEX_HTML.exists(),
+    reason="SPA build (apps/web/dist) chưa có — chạy `cd apps/web && npm run build`",
+)
+
 
 @pytest.fixture
 def app_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
@@ -45,6 +52,7 @@ async def client(app_env: None) -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.mark.asyncio
+@requires_spa_build
 async def test_root_serves_html(client: httpx.AsyncClient) -> None:
     res = await client.get("/")
     assert res.status_code == 200
@@ -53,6 +61,7 @@ async def test_root_serves_html(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+@requires_spa_build
 async def test_unknown_route_serves_spa(client: httpx.AsyncClient) -> None:
     res = await client.get("/dashboard/something-fake")
     assert res.status_code == 200
@@ -74,6 +83,7 @@ async def test_healthz_not_swallowed(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+@requires_spa_build
 async def test_admin_path_redirects_to_spa(client: httpx.AsyncClient) -> None:
     """Jinja `/admin/*` đã bị gỡ — `/admin/login` rơi vào SPA fallback (200 HTML).
 
@@ -87,6 +97,7 @@ async def test_admin_path_redirects_to_spa(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+@requires_spa_build
 async def test_assets_have_immutable_cache(client: httpx.AsyncClient) -> None:
     """Lấy bất kỳ file nào trong /assets/ và kiểm Cache-Control."""
     import re

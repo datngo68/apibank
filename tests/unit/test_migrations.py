@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,14 +15,13 @@ def _run_alembic(args: list[str], db_url: str, repo_root: Path) -> subprocess.Co
         "APIBANK_DB_URL": db_url,
         "APIBANK_FERNET_KEYS": "",
         "APIBANK_API_KEY_SALT": "test-salt",
-        "PATH": "",
     }
     import os
 
     env_full = os.environ.copy()
     env_full.update(env)
     return subprocess.run(  # noqa: S603
-        ["python", "-m", "alembic", *args],  # noqa: S607
+        [sys.executable, "-m", "alembic", *args],
         cwd=str(repo_root),
         env=env_full,
         capture_output=True,
