@@ -182,7 +182,7 @@ async def create_bank_account(
         from packages.infra_pubsub import publish
 
         await publish("bank:account:added", account.id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return BankAccountRead.model_validate(account, from_attributes=True)
 
@@ -265,7 +265,7 @@ async def verify_bank_account(
         from packages.infra_pubsub import publish
 
         await publish("bank:account:added", account.id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return BankAccountRead.model_validate(account, from_attributes=True)
 
@@ -299,7 +299,7 @@ async def rotate_bank_credentials(
         from packages.infra_pubsub import publish
 
         await publish("bank:account:added", account.id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return BankAccountRead.model_validate(account, from_attributes=True)
 
@@ -342,7 +342,7 @@ async def delete_bank_account(
         from packages.infra_pubsub import publish
 
         await publish("bank:account:added", account.id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return GenericMessage(message="deleted")
 

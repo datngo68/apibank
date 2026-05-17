@@ -416,12 +416,10 @@ async def run_poller_loop(stop_event: asyncio.Event | None = None) -> None:
 
     try:
         while not local_stop.is_set():
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     rescan_event.wait(), timeout=RESCAN_INTERVAL_SEC
                 )
-            except TimeoutError:
-                pass
             rescan_event.clear()
             try:
                 await reconcile_accounts()
