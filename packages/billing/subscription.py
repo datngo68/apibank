@@ -158,7 +158,10 @@ async def change_plan(
     Để đơn giản hóa, ta chỉ tính refund nếu có subscription đang active.
     """
     existing = await get_active_subscription(session, user.id)
-    refund_key_suffix = idempotency_key or f"{user.id}:{new_plan_code}:{int(datetime.now(UTC).timestamp())}"
+    refund_key_suffix = (
+        idempotency_key
+        or f"{user.id}:{new_plan_code}:{int(datetime.now(UTC).timestamp())}"
+    )
 
     if existing is not None:
         current_plan = await session.get(Plan, existing.plan_id)

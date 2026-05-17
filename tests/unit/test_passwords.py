@@ -34,7 +34,7 @@ def test_empty_password_rejected_at_verify() -> None:
 
 
 def test_handles_unicode_password() -> None:
-    pwd = "Mật-khẩu-😀-1"
+    pwd = "Mật-khẩu-😀-1"  # noqa: S105
     h = hash_password(pwd)
     assert verify_password(pwd, h) is True
     assert verify_password("Mật-khẩu-😀-2", h) is False

@@ -56,7 +56,10 @@ async def _list(_: argparse.Namespace) -> int:
             ).all()
         )
         for p in rows:
-            print(f"{p.code}\t{p.name}\t{int(p.price_vnd):,} VND\t{p.duration_days}d\tactive={p.active}")
+            print(
+                f"{p.code}\t{p.name}\t{int(p.price_vnd):,} VND\t"
+                f"{p.duration_days}d\tactive={p.active}"
+            )
     return 0
 
 

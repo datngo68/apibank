@@ -44,6 +44,7 @@ from packages.db.session import get_session
 from packages.qr.vietqr import vietqr_image_url
 from packages.schemas.auth import GenericMessage
 from packages.schemas.me import (
+    VALID_NOTIFICATION_CHANNELS,
     BankAccountCreate,
     BankAccountRead,
     BankAccountRotate,
@@ -67,7 +68,6 @@ from packages.schemas.me import (
     TopupListItem,
     TopupResponse,
     TransactionListItem,
-    VALID_NOTIFICATION_CHANNELS,
     WalletBalanceRead,
     WalletTransactionRead,
 )
@@ -617,7 +617,9 @@ async def create_topup(
             session, user=user, amount_vnd=payload.amount_vnd
         )
     except SystemBankNotConfiguredError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     await record_audit(
         session,
         actor=user.id,
@@ -1037,10 +1039,7 @@ async def list_notification_preferences(
     for kind, default_channels in DEFAULT_CHANNELS.items():
         for channel in VALID_NOTIFICATION_CHANNELS:
             key = (kind, channel)
-            if key in overrides:
-                enabled = overrides[key]
-            else:
-                enabled = channel in default_channels
+            enabled = overrides.get(key, channel in default_channels)
             items.append(
                 NotificationPreferenceItem(kind=kind, channel=channel, enabled=enabled)
             )

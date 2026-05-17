@@ -22,7 +22,7 @@ def test_local_default_uses_api_key_salt_as_session_secret_fallback(
     monkeypatch.setenv("APIBANK_ENVIRONMENT", "local")
     monkeypatch.setenv("APIBANK_API_KEY_SALT", "dev-only-change-me")  # noqa: S105
     settings = Settings()
-    assert settings.session_secret_key == "dev-only-change-me"
+    assert settings.session_secret_key == "dev-only-change-me"  # noqa: S105
     assert settings.is_production is False
     assert settings.cookie_secure_effective is False
 

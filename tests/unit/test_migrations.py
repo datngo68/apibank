@@ -20,8 +20,8 @@ def _run_alembic(args: list[str], db_url: str, repo_root: Path) -> subprocess.Co
 
     env_full = os.environ.copy()
     env_full.update(env)
-    return subprocess.run(
-        ["python", "-m", "alembic", *args],
+    return subprocess.run(  # noqa: S603
+        ["python", "-m", "alembic", *args],  # noqa: S607
         cwd=str(repo_root),
         env=env_full,
         capture_output=True,

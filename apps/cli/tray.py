@@ -13,6 +13,7 @@ fallback log + signal.signal(SIGINT) bình thường.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import signal
@@ -82,7 +83,9 @@ def run_with_tray(
     if embed_workers:
         os.environ["APIBANK_EMBED_WORKERS"] = "1"
 
-    base_url = f"http://{'localhost' if host in ('0.0.0.0', '::') else host}:{port}"
+    base_url = (
+        f"http://{'localhost' if host in ('0.0.0.0', '::') else host}:{port}"  # noqa: S104
+    )
 
     server_state: dict[str, Any] = {"server": None, "thread": None, "stopped": False}
 
@@ -127,20 +130,21 @@ def run_with_tray(
             import subprocess
 
             subprocess.run(
-                ["clip"], input=base_url.encode("utf-16-le"), check=False, shell=False
+                ["clip"],  # noqa: S603, S607
+                input=base_url.encode("utf-16-le"),
+                check=False,
+                shell=False,
             )
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("tray_copy_url_failed", exc_info=True)
 
     def _quit(icon: Any, _item: Any) -> None:
         logger.info("tray_quit_requested")
         server = server_state.get("server")
         if server is not None:
             server.should_exit = True
-            try:
+            with contextlib.suppress(Exception):
                 server.force_exit = True
-            except Exception:  # noqa: BLE001
-                pass
         icon.stop()
 
     menu = (
@@ -209,4 +213,4 @@ def run_console(
 
     print(f"\n  APIBank — http://{host}:{port}\n", flush=True)
     print(f"$ {shlex.join(cmd)}", flush=True)
-    return subprocess.call(cmd)
+    return subprocess.call(cmd)  # noqa: S603

@@ -70,8 +70,16 @@ class MBAdapter:
         if not await self.health():
             await self.login()
         # MB API yêu cầu fromDate/toDate theo giờ VN (lib chỉ strftime, không tz-convert).
-        start_vn = start.astimezone(_VN_TZ) if start.tzinfo else start.replace(tzinfo=UTC).astimezone(_VN_TZ)
-        end_vn = end.astimezone(_VN_TZ) if end.tzinfo else end.replace(tzinfo=UTC).astimezone(_VN_TZ)
+        start_vn = (
+            start.astimezone(_VN_TZ)
+            if start.tzinfo
+            else start.replace(tzinfo=UTC).astimezone(_VN_TZ)
+        )
+        end_vn = (
+            end.astimezone(_VN_TZ)
+            if end.tzinfo
+            else end.replace(tzinfo=UTC).astimezone(_VN_TZ)
+        )
         result = await client.getTransactionAccountHistory(
             accountNo=account_no, from_date=start_vn, to_date=end_vn
         )

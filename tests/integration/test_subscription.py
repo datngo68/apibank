@@ -77,10 +77,14 @@ async def test_insufficient_balance_blocks_purchase(seeded: AsyncSession) -> Non
 @pytest.mark.asyncio
 async def test_renew_extends_expires_at(seeded: AsyncSession) -> None:
     user = await _user_with_balance(seeded, 200_000)
-    sub1, _ = await subscription.purchase(seeded, user=user, plan_code="monthly", idempotency_key="r1")
+    sub1, _ = await subscription.purchase(
+        seeded, user=user, plan_code="monthly", idempotency_key="r1"
+    )
     await seeded.commit()
     first_exp = sub1.expires_at
-    sub2, _ = await subscription.purchase(seeded, user=user, plan_code="monthly", idempotency_key="r2")
+    sub2, _ = await subscription.purchase(
+        seeded, user=user, plan_code="monthly", idempotency_key="r2"
+    )
     await seeded.commit()
     assert sub2.id == sub1.id
     # SQLite có thể trả naive datetime; chuẩn hoá về cùng tz để so sánh
@@ -94,9 +98,13 @@ async def test_renew_extends_expires_at(seeded: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_purchase_idempotent(seeded: AsyncSession) -> None:
     user = await _user_with_balance(seeded, 50_000)
-    a, _ = await subscription.purchase(seeded, user=user, plan_code="trial-day", idempotency_key="dup")
+    a, _ = await subscription.purchase(
+        seeded, user=user, plan_code="trial-day", idempotency_key="dup"
+    )
     await seeded.commit()
-    b, _ = await subscription.purchase(seeded, user=user, plan_code="trial-day", idempotency_key="dup")
+    b, _ = await subscription.purchase(
+        seeded, user=user, plan_code="trial-day", idempotency_key="dup"
+    )
     await seeded.commit()
     assert a.id == b.id  # cùng sub
     refreshed = await seeded.get(User, user.id)
@@ -113,7 +121,9 @@ async def test_get_active_subscription_none_when_no_sub(seeded: AsyncSession) ->
 @pytest.mark.asyncio
 async def test_expire_due_subscriptions(seeded: AsyncSession) -> None:
     user = await _user_with_balance(seeded, 200_000)
-    sub, _ = await subscription.purchase(seeded, user=user, plan_code="monthly", idempotency_key="e1")
+    sub, _ = await subscription.purchase(
+        seeded, user=user, plan_code="monthly", idempotency_key="e1"
+    )
     sub.expires_at = datetime.now(UTC) - timedelta(days=1)
     await seeded.commit()
     n = await subscription.expire_due_subscriptions(seeded)
@@ -126,7 +136,9 @@ async def test_expire_due_subscriptions(seeded: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_change_plan_with_prorate_refund(seeded: AsyncSession) -> None:
     user = await _user_with_balance(seeded, 200_000)
-    sub, _ = await subscription.purchase(seeded, user=user, plan_code="monthly", idempotency_key="cp1")
+    sub, _ = await subscription.purchase(
+        seeded, user=user, plan_code="monthly", idempotency_key="cp1"
+    )
     await seeded.commit()
     # Sau 0 ngày → refund ~15k, mua mới plan trial 1k
     new_sub, new_invoice = await subscription.change_plan(

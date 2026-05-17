@@ -24,4 +24,4 @@ def run(args: argparse.Namespace) -> int:
     cmd.append("downgrade" if args.downgrade else "upgrade")
     cmd.append(args.target)
     print(f"$ {' '.join(cmd)}", flush=True)
-    return subprocess.call(cmd, env=os.environ.copy())
+    return subprocess.call(cmd, env=os.environ.copy())  # noqa: S603

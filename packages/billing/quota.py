@@ -29,9 +29,7 @@ class QuotaStatus:
     def exceeded(self) -> bool:
         if self.limit_day and self.used_today > self.limit_day:
             return True
-        if self.limit_month and self.used_month > self.limit_month:
-            return True
-        return False
+        return bool(self.limit_month and self.used_month > self.limit_month)
 
 
 class QuotaTracker:

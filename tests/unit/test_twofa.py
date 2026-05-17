@@ -44,7 +44,7 @@ def test_provisioning_uri_format() -> None:
 
 
 def test_provisioning_qr_data_uri_returns_png_base64() -> None:
-    secret = "JBSWY3DPEHPK3PXP"
+    secret = "JBSWY3DPEHPK3PXP"  # noqa: S105
     uri = provisioning_uri(secret, account="ban@example.com")
     data_uri = provisioning_qr_data_uri(uri)
     assert data_uri.startswith("data:image/png;base64,")

@@ -60,7 +60,7 @@ async def test_set_and_get_decrypted_roundtrip(db_with_fernet: AsyncSession) -> 
         db_with_fernet, "smtp", encrypted_fields=("password",)
     )
     assert decrypted["host"] == "smtp.example.com"
-    assert decrypted["password"] == "secret123"
+    assert decrypted["password"] == "secret123"  # noqa: S105
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_empty_secret_preserves_existing(db_with_fernet: AsyncSession) -> 
         db_with_fernet, "smtp", encrypted_fields=("password",)
     )
     assert decrypted["host"] == "h2"
-    assert decrypted["password"] == "secret123"
+    assert decrypted["password"] == "secret123"  # noqa: S105
 
 
 @pytest.mark.asyncio

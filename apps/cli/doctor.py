@@ -76,13 +76,15 @@ async def check_node_version() -> CheckResult:
     npm = shutil.which("node")
     if npm is None:
         return CheckResult(False, "Node.js", "không tìm thấy", "cài Node 20+")
-    out = subprocess.run([npm, "--version"], capture_output=True, text=True, check=False)
+    out = subprocess.run(  # noqa: ASYNC221, S603
+        [npm, "--version"], capture_output=True, text=True, check=False
+    )
     return CheckResult(out.returncode == 0, "Node.js", out.stdout.strip())
 
 
 async def check_env_file() -> CheckResult:
     path = Path(".env")
-    return CheckResult(path.exists(), ".env", str(path), "copy .env.example → .env")
+    return CheckResult(path.exists(), ".env", str(path), "copy .env.example → .env")  # noqa: ASYNC240
 
 
 async def check_fernet_keys() -> CheckResult:
@@ -219,7 +221,7 @@ async def check_admin_user() -> CheckResult:
 
 async def check_web_dist() -> CheckResult:
     path = Path("apps/web/dist/index.html")
-    if not path.exists():
+    if not path.exists():  # noqa: ASYNC240
         return CheckResult(
             False,
             "Web dist",

@@ -92,7 +92,9 @@ async def revoke_session(session: AsyncSession, session_id: str) -> bool:
     return (result.rowcount or 0) > 0
 
 
-async def revoke_all_sessions(session: AsyncSession, user_id: str, *, except_id: str | None = None) -> int:
+async def revoke_all_sessions(
+    session: AsyncSession, user_id: str, *, except_id: str | None = None
+) -> int:
     now = datetime.now(UTC)
     stmt = (
         update(SessionModel)

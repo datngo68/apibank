@@ -15,7 +15,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         "start",
         help="run API + embedded worker/scheduler/dispatcher",
     )
-    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--host", default="0.0.0.0")  # noqa: S104
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--no-embed", action="store_true", help="disable embedded workers")

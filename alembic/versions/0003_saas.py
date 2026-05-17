@@ -210,7 +210,12 @@ def upgrade() -> None:
     with op.batch_alter_table("bank_accounts") as batch:
         batch.add_column(sa.Column("user_id", sa.String(64), nullable=True))
         batch.add_column(
-            sa.Column("is_system_account", sa.Boolean(), nullable=False, server_default=sa.text("false"))
+            sa.Column(
+                "is_system_account",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            )
         )
         batch.add_column(
             sa.Column("polling_status", sa.String(16), nullable=False, server_default="idle")
