@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from packages.db.models import (
-    Base,
     BankAccount,
+    Base,
     Order,
     Transaction,
     Webhook,

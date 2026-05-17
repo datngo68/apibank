@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from packages.db.models import Webhook, WebhookAttempt, utcnow
+from packages.db.models import WebhookAttempt, utcnow
 from packages.obs import metrics
 from packages.webhook import decrypt_webhook_secret, is_safe_webhook_url
 from packages.webhook.signing import sign_payload
@@ -166,6 +166,12 @@ async def _claim_attempts(
             )
         ).all()
     )
+    # Identity-map sync: UPDATE pha 1 dùng synchronize_session=False nên
+    # các instance đã tồn tại trong session có thể giữ status='pending'
+    # cached trong memory. Force expire để pha 2 (gán status='pending'
+    # cho retry) thực sự được flush ra DB như dirty change.
+    for attempt in attempts:
+        await session.refresh(attempt, attribute_names=["status", "claimed_at"])
     return attempts
 
 
