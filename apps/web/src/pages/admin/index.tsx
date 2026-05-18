@@ -145,6 +145,7 @@ export function AdminDashboardPage() {
 
 export { AdminUsersPage } from "./users";
 export { AdminPlansPage } from "./plans";
+export { AdminCouponsPage } from "./coupons";
 export { AdminBankAccountsPage } from "./bank-accounts";
 export { AdminConfigPage } from "./config";
 export { AdminAuditLogPage } from "./audit-log";

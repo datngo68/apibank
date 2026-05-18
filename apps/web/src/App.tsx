@@ -23,6 +23,7 @@ import {
   AdminDashboardPage,
   AdminUsersPage,
   AdminPlansPage,
+  AdminCouponsPage,
   AdminBankAccountsPage,
   AdminConfigPage,
   AdminAuditLogPage,
@@ -75,6 +76,7 @@ export function App() {
         <Route path="admin" element={<AdminDashboardPage />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
         <Route path="admin/plans" element={<AdminPlansPage />} />
+        <Route path="admin/coupons" element={<AdminCouponsPage />} />
         <Route path="admin/bank-accounts" element={<AdminBankAccountsPage />} />
         <Route path="admin/config" element={<AdminConfigPage />} />
         <Route path="admin/audit-log" element={<AdminAuditLogPage />} />

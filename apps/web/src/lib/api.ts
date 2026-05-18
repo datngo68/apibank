@@ -227,6 +227,9 @@ export interface InvoiceRead {
   currency: string;
   status: string;
   issued_at: string;
+  coupon_code?: string | null;
+  discount_vnd?: string;
+  original_amount_vnd?: string | null;
 }
 
 export interface OrderItem {
@@ -351,8 +354,16 @@ export const endpoints = {
 
   // subscription / invoices
   subscription: () => api.get<SubscriptionRead | null>("/api/v1/me/subscription"),
-  purchaseSubscription: (plan_code: string) =>
-    api.post<SubscriptionRead>("/api/v1/me/subscription/purchase", { plan_code }),
+  purchaseSubscription: (plan_code: string, coupon_code?: string | null) =>
+    api.post<SubscriptionRead>("/api/v1/me/subscription/purchase", {
+      plan_code,
+      coupon_code: coupon_code || undefined,
+    }),
+  previewCoupon: (code: string, plan_code: string) =>
+    api.post<CouponPreviewResponse>("/api/v1/me/coupons/preview", {
+      code,
+      plan_code,
+    }),
   invoices: () => api.get<InvoiceRead[]>("/api/v1/me/invoices"),
 
   // orders / transactions
@@ -471,6 +482,74 @@ export interface AdminPlanCreateInput {
   features_json?: Record<string, unknown>;
   sort_order?: number;
   active?: boolean;
+}
+
+export interface AdminCoupon {
+  id: string;
+  code: string;
+  description: string | null;
+  discount_type: "percent" | "fixed";
+  percent_off: number | null;
+  amount_off_vnd: string | null;
+  max_discount_vnd: string | null;
+  min_amount_vnd: string | null;
+  max_redemptions: number | null;
+  max_per_user: number;
+  redeemed_count: number;
+  valid_from: string | null;
+  valid_until: string | null;
+  plan_codes_json: string[];
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminCouponCreateInput {
+  code: string;
+  description?: string | null;
+  discount_type: "percent" | "fixed";
+  percent_off?: number | null;
+  amount_off_vnd?: number | null;
+  max_discount_vnd?: number | null;
+  min_amount_vnd?: number | null;
+  max_redemptions?: number | null;
+  max_per_user?: number;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  plan_codes?: string[];
+  active?: boolean;
+}
+
+export interface AdminCouponUpdateInput {
+  description?: string | null;
+  max_redemptions?: number | null;
+  max_per_user?: number | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  plan_codes?: string[] | null;
+  active?: boolean | null;
+}
+
+export interface AdminCouponRedemption {
+  id: string;
+  coupon_code: string;
+  user_id: string;
+  invoice_id: string | null;
+  subscription_id: string | null;
+  plan_code: string | null;
+  amount_before_vnd: string;
+  discount_vnd: string;
+  amount_after_vnd: string;
+  created_at: string;
+}
+
+export interface CouponPreviewResponse {
+  code: string;
+  plan_code: string;
+  discount_type: "percent" | "fixed";
+  original_amount_vnd: string;
+  discount_vnd: string;
+  final_amount_vnd: string;
 }
 
 export interface AdminBankAccount {
@@ -616,6 +695,20 @@ export const adminEndpoints = {
   updatePlan: (id: string, body: Partial<AdminPlanCreateInput>) =>
     api.patch<AdminPlan>(`/api/v1/admin/plans/${id}`, body),
   deletePlan: (id: string) => api.delete(`/api/v1/admin/plans/${id}`),
+
+  // coupons
+  listCoupons: (params?: { active_only?: boolean }) =>
+    api.get<AdminCoupon[]>("/api/v1/admin/coupons", { params }),
+  createCoupon: (body: AdminCouponCreateInput) =>
+    api.post<AdminCoupon>("/api/v1/admin/coupons", body),
+  updateCoupon: (id: string, body: AdminCouponUpdateInput) =>
+    api.patch<AdminCoupon>(`/api/v1/admin/coupons/${id}`, body),
+  deleteCoupon: (id: string) => api.delete(`/api/v1/admin/coupons/${id}`),
+  listCouponRedemptions: (id: string, params?: { limit?: number }) =>
+    api.get<AdminCouponRedemption[]>(
+      `/api/v1/admin/coupons/${id}/redemptions`,
+      { params },
+    ),
 
   // bank accounts + system bank
   listBankAccounts: () =>

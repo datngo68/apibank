@@ -17,6 +17,7 @@ import {
   BookOpen,
   LogOut,
   ChevronRight,
+  TicketPercent,
 } from "lucide-react";
 import { useEffect } from "react";
 import { Logo } from "@/components/logo";
@@ -59,6 +60,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: "/app/admin", label: "Admin dashboard", icon: ShieldCheck, end: true },
   { to: "/app/admin/users", label: "Người dùng", icon: Users },
   { to: "/app/admin/plans", label: "Plans", icon: CreditCard },
+  { to: "/app/admin/coupons", label: "Mã giảm giá", icon: TicketPercent },
   { to: "/app/admin/bank-accounts", label: "Ngân hàng hệ thống", icon: Banknote },
   { to: "/app/admin/config", label: "Cấu hình", icon: ServerCog },
   { to: "/app/admin/audit-log", label: "Audit log", icon: ScrollText },
