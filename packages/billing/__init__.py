@@ -2,6 +2,13 @@
 
 from packages.billing.errors import (
     BillingError,
+    CouponAlreadyRedeemedError,
+    CouponConflictError,
+    CouponError,
+    CouponExhaustedError,
+    CouponExpiredError,
+    CouponNotApplicableError,
+    CouponNotFoundError,
     IdempotencyConflictError,
     InsufficientFundsError,
     PlanNotFoundError,
@@ -10,6 +17,13 @@ from packages.billing.errors import (
 
 __all__ = [
     "BillingError",
+    "CouponAlreadyRedeemedError",
+    "CouponConflictError",
+    "CouponError",
+    "CouponExhaustedError",
+    "CouponExpiredError",
+    "CouponNotApplicableError",
+    "CouponNotFoundError",
     "IdempotencyConflictError",
     "InsufficientFundsError",
     "PlanNotFoundError",

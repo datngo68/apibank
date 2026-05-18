@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 # -- Users -----------------------------------------------------------------
 
@@ -115,6 +115,94 @@ class AdminPlanUpdate(BaseModel):
     features_json: dict[str, Any] | None = None
     sort_order: int | None = None
     active: bool | None = None
+
+
+# -- Coupons ---------------------------------------------------------------
+
+
+class AdminCouponRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    code: str
+    description: str | None
+    discount_type: str
+    percent_off: int | None
+    amount_off_vnd: Decimal | None
+    max_discount_vnd: Decimal | None
+    min_amount_vnd: Decimal | None
+    max_redemptions: int | None
+    max_per_user: int
+    redeemed_count: int
+    valid_from: datetime | None
+    valid_until: datetime | None
+    plan_codes_json: list[str]
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminCouponCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    description: str | None = Field(default=None, max_length=500)
+    discount_type: str = Field(pattern="^(percent|fixed)$")
+    percent_off: int | None = Field(default=None, ge=1, le=100)
+    amount_off_vnd: int | None = Field(default=None, ge=1)
+    max_discount_vnd: int | None = Field(default=None, ge=1)
+    min_amount_vnd: int | None = Field(default=None, ge=0)
+    max_redemptions: int | None = Field(default=None, ge=1)
+    max_per_user: int = Field(default=1, ge=1, le=100)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    plan_codes: list[str] = Field(default_factory=list)
+    active: bool = True
+
+    @model_validator(mode="after")
+    def _check_discount_fields(self) -> AdminCouponCreate:
+        if self.discount_type == "percent":
+            if self.percent_off is None:
+                raise ValueError("percent_off bắt buộc khi discount_type=percent")
+            if self.amount_off_vnd is not None:
+                raise ValueError("amount_off_vnd phải để trống với discount_type=percent")
+        else:  # fixed
+            if self.amount_off_vnd is None:
+                raise ValueError("amount_off_vnd bắt buộc khi discount_type=fixed")
+            if self.percent_off is not None or self.max_discount_vnd is not None:
+                raise ValueError(
+                    "percent_off và max_discount_vnd phải để trống với discount_type=fixed"
+                )
+        if (
+            self.valid_from is not None
+            and self.valid_until is not None
+            and self.valid_from >= self.valid_until
+        ):
+            raise ValueError("valid_until phải sau valid_from")
+        return self
+
+
+class AdminCouponUpdate(BaseModel):
+    description: str | None = Field(default=None, max_length=500)
+    max_redemptions: int | None = Field(default=None, ge=1)
+    max_per_user: int | None = Field(default=None, ge=1, le=100)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    plan_codes: list[str] | None = None
+    active: bool | None = None
+
+
+class AdminCouponRedemptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    coupon_code: str
+    user_id: str
+    invoice_id: str | None
+    subscription_id: str | None
+    plan_code: str | None
+    amount_before_vnd: Decimal
+    discount_vnd: Decimal
+    amount_after_vnd: Decimal
+    created_at: datetime
 
 
 # -- Bank accounts ---------------------------------------------------------

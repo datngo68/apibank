@@ -214,6 +214,21 @@ class SubscriptionRead(BaseModel):
 
 class SubscriptionPurchaseRequest(BaseModel):
     plan_code: str = Field(min_length=1, max_length=32)
+    coupon_code: str | None = Field(default=None, max_length=64)
+
+
+class CouponPreviewRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    plan_code: str = Field(min_length=1, max_length=32)
+
+
+class CouponPreviewResponse(BaseModel):
+    code: str
+    plan_code: str
+    discount_type: str
+    original_amount_vnd: Decimal
+    discount_vnd: Decimal
+    final_amount_vnd: Decimal
 
 
 class InvoiceRead(BaseModel):
@@ -225,6 +240,9 @@ class InvoiceRead(BaseModel):
     currency: str
     status: str
     issued_at: datetime
+    coupon_code: str | None = None
+    discount_vnd: Decimal = Decimal(0)
+    original_amount_vnd: Decimal | None = None
 
 
 # -- Orders / Transactions list ---------------------------------------------

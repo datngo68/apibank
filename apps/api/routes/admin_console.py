@@ -22,6 +22,8 @@ from packages.db.models import (
     ApiKey,
     AuditLog,
     BankAccount,
+    Coupon,
+    CouponRedemption,
     EmailToken,
     Order,
     Plan,
@@ -42,6 +44,10 @@ from packages.schemas.admin import (
     AdminAuditItem,
     AdminAuditResponse,
     AdminBankAccountRead,
+    AdminCouponCreate,
+    AdminCouponRead,
+    AdminCouponRedemptionRead,
+    AdminCouponUpdate,
     AdminPlanCreate,
     AdminPlanRead,
     AdminPlanUpdate,
@@ -536,6 +542,190 @@ async def admin_delete_plan(
     )
     await session.commit()
     return GenericMessage(message="deactivated")
+
+
+# ---------------------------------------------------------------------------
+# COUPONS
+# ---------------------------------------------------------------------------
+
+
+def _coupon_to_read(coupon: Coupon) -> AdminCouponRead:
+    return AdminCouponRead.model_validate(coupon, from_attributes=True)
+
+
+@router.get("/coupons", response_model=list[AdminCouponRead])
+async def admin_list_coupons(
+    active_only: bool = Query(default=False),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminCouponRead]:
+    stmt = select(Coupon).order_by(desc(Coupon.created_at))
+    if active_only:
+        stmt = stmt.where(Coupon.active.is_(True))
+    rows = list((await session.scalars(stmt)).all())
+    return [_coupon_to_read(r) for r in rows]
+
+
+@router.post(
+    "/coupons", response_model=AdminCouponRead, status_code=status.HTTP_201_CREATED
+)
+async def admin_create_coupon(
+    payload: AdminCouponCreate,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminCouponRead:
+    code = payload.code.strip().upper()
+    existing = (
+        await session.scalars(select(Coupon).where(Coupon.code == code))
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="coupon code already exists")
+    coupon = Coupon(
+        code=code,
+        description=payload.description,
+        discount_type=payload.discount_type,
+        percent_off=payload.percent_off,
+        amount_off_vnd=(
+            Decimal(payload.amount_off_vnd)
+            if payload.amount_off_vnd is not None
+            else None
+        ),
+        max_discount_vnd=(
+            Decimal(payload.max_discount_vnd)
+            if payload.max_discount_vnd is not None
+            else None
+        ),
+        min_amount_vnd=(
+            Decimal(payload.min_amount_vnd)
+            if payload.min_amount_vnd is not None
+            else None
+        ),
+        max_redemptions=payload.max_redemptions,
+        max_per_user=payload.max_per_user,
+        valid_from=payload.valid_from,
+        valid_until=payload.valid_until,
+        plan_codes_json=list(payload.plan_codes),
+        active=payload.active,
+        created_by=actor.id,
+    )
+    session.add(coupon)
+    await session.flush()
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.coupon.create",
+        target_type="coupon",
+        target_id=coupon.id,
+        ip=request.client.host if request.client else None,
+        after={
+            "code": coupon.code,
+            "discount_type": coupon.discount_type,
+            "percent_off": coupon.percent_off,
+            "amount_off_vnd": (
+                str(coupon.amount_off_vnd)
+                if coupon.amount_off_vnd is not None
+                else None
+            ),
+        },
+    )
+    await session.commit()
+    return _coupon_to_read(coupon)
+
+
+@router.patch("/coupons/{coupon_id}", response_model=AdminCouponRead)
+async def admin_update_coupon(
+    coupon_id: str,
+    payload: AdminCouponUpdate,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminCouponRead:
+    coupon = await session.get(Coupon, coupon_id)
+    if coupon is None:
+        raise HTTPException(status_code=404, detail="coupon not found")
+    data = payload.model_dump(exclude_unset=True)
+    if "plan_codes" in data:
+        coupon.plan_codes_json = list(data.pop("plan_codes") or [])
+    for field, val in data.items():
+        setattr(coupon, field, val)
+    if (
+        coupon.valid_from is not None
+        and coupon.valid_until is not None
+        and coupon.valid_from >= coupon.valid_until
+    ):
+        raise HTTPException(status_code=422, detail="valid_until phải sau valid_from")
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.coupon.update",
+        target_type="coupon",
+        target_id=coupon.id,
+        ip=request.client.host if request.client else None,
+        after=data,
+    )
+    await session.commit()
+    return _coupon_to_read(coupon)
+
+
+@router.delete("/coupons/{coupon_id}", response_model=GenericMessage)
+async def admin_delete_coupon(
+    coupon_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    """Xoá vĩnh viễn nếu chưa có redemption, ngược lại trả 409.
+
+    Admin nên `active=false` thay vì xoá khi đã có người dùng để giữ audit.
+    """
+    coupon = await session.get(Coupon, coupon_id)
+    if coupon is None:
+        raise HTTPException(status_code=404, detail="coupon not found")
+    if coupon.redeemed_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="coupon đã có người dùng — đặt active=false thay vì xoá",
+        )
+    await session.delete(coupon)
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.coupon.delete",
+        target_type="coupon",
+        target_id=coupon_id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return GenericMessage(message="deleted")
+
+
+@router.get(
+    "/coupons/{coupon_id}/redemptions",
+    response_model=list[AdminCouponRedemptionRead],
+)
+async def admin_list_coupon_redemptions(
+    coupon_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminCouponRedemptionRead]:
+    coupon = await session.get(Coupon, coupon_id)
+    if coupon is None:
+        raise HTTPException(status_code=404, detail="coupon not found")
+    rows = list(
+        (
+            await session.scalars(
+                select(CouponRedemption)
+                .where(CouponRedemption.coupon_id == coupon_id)
+                .order_by(desc(CouponRedemption.created_at))
+                .limit(limit)
+            )
+        ).all()
+    )
+    return [
+        AdminCouponRedemptionRead.model_validate(r, from_attributes=True) for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

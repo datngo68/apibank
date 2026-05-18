@@ -1,8 +1,8 @@
 """Subscription + Invoice.
 
 Logic:
-- `purchase(user, plan)` debit ví → upsert Subscription (extend nếu đang còn) →
-  tạo Invoice paid → trả (subscription, invoice).
+- `purchase(user, plan, coupon_code=None)` debit ví → upsert Subscription
+  (extend nếu đang còn) → tạo Invoice paid → trả (subscription, invoice).
 - `expire_due_subscriptions()` job: chạy hằng ngày, đánh dấu expired và (tùy chọn)
   notify trước 3 ngày + ngày hết hạn.
 - Idempotency: client gửi `idempotency_key` để retry an toàn.
@@ -16,6 +16,7 @@ from decimal import Decimal
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from packages.billing import coupons as coupons_pkg
 from packages.billing import wallet
 from packages.billing.errors import PlanNotFoundError
 from packages.db.models import Invoice, Plan, Subscription, User
@@ -60,25 +61,47 @@ async def purchase(
     user: User,
     plan_code: str,
     idempotency_key: str | None = None,
+    coupon_code: str | None = None,
 ) -> tuple[Subscription, Invoice]:
     """Mua/gia hạn gói. Caller phải `commit()`.
 
-    - Debit ví theo `plan.price_vnd` (idempotency_key duy nhất per purchase).
+    - Debit ví theo `plan.price_vnd` (hoặc giá đã giảm nếu áp coupon).
+    - Coupon (nếu hợp lệ) sẽ được redeem ngay; lỗi coupon raise lên caller
+      (CouponNotFoundError, CouponExpiredError, CouponExhaustedError,
+      CouponAlreadyRedeemedError, CouponNotApplicableError).
     - Nếu user đã có Subscription active của bất kỳ plan nào → extend `expires_at`
       thêm `plan.duration_days` từ thời điểm hết hạn hiện tại.
-    - Invoice luôn được tạo (status=paid).
+    - Invoice luôn được tạo (status=paid) với cột discount_vnd nếu áp coupon.
     """
     plan = await get_plan(session, plan_code)
     key = idempotency_key or f"sub:{user.id}:{plan.code}:{int(datetime.now(UTC).timestamp())}"
 
-    # Debit ví trước; nếu thiếu sẽ raise InsufficientFundsError, caller xử lý.
+    original_price = Decimal(plan.price_vnd)
+    discount_vnd = Decimal(0)
+    final_price = original_price
+    coupon_obj = None
+    breakdown = None
+    if coupon_code:
+        coupon_obj = await coupons_pkg.get_active_coupon(session, coupon_code)
+        breakdown, _ = await coupons_pkg.redeem(
+            session,
+            coupon=coupon_obj,
+            user_id=user.id,
+            plan_code=plan.code,
+            amount_vnd=original_price,
+        )
+        discount_vnd = breakdown.discount_vnd
+        final_price = breakdown.final_amount_vnd
+
+    # Debit ví theo giá cuối; nếu thiếu sẽ raise InsufficientFundsError.
     wallet_tx = await wallet.debit(
         session,
         user_id=user.id,
-        amount_vnd=Decimal(plan.price_vnd),
+        amount_vnd=final_price,
         idempotency_key=key,
         ref_kind="invoice",
-        note=f"Mua gói {plan.code}",
+        note=f"Mua gói {plan.code}"
+        + (f" (mã {coupon_obj.code})" if coupon_obj is not None else ""),
         created_by=user.id,
     )
 
@@ -107,14 +130,35 @@ async def purchase(
         user_id=user.id,
         subscription_id=sub.id,
         plan_code=plan.code,
-        amount_vnd=Decimal(plan.price_vnd),
+        amount_vnd=final_price,
         currency="VND",
         status="paid",
         wallet_tx_id=wallet_tx.id,
         issued_at=now,
+        coupon_code=coupon_obj.code if coupon_obj is not None else None,
+        discount_vnd=discount_vnd,
+        original_amount_vnd=original_price if coupon_obj is not None else None,
     )
     session.add(invoice)
     await session.flush()
+
+    # Cập nhật redemption với invoice_id/subscription_id để admin trace lại.
+    if coupon_obj is not None:
+        from packages.db.models import CouponRedemption
+
+        latest = await session.scalar(
+            select(CouponRedemption)
+            .where(CouponRedemption.coupon_id == coupon_obj.id)
+            .where(CouponRedemption.user_id == user.id)
+            .where(CouponRedemption.invoice_id.is_(None))
+            .order_by(CouponRedemption.created_at.desc())
+            .limit(1)
+        )
+        if latest is not None:
+            latest.invoice_id = invoice.id
+            latest.subscription_id = sub.id
+            await session.flush()
+
     # Best-effort notify; không fail purchase nếu dispatcher lỗi.
     try:
         from packages.notifications.dispatcher import notify
@@ -125,14 +169,16 @@ async def purchase(
             kind="subscription_purchased",
             title=f"Đã kích hoạt gói {plan.code}",
             body=(
-                f"Hoá đơn {invoice.id} đã thanh toán {int(plan.price_vnd):,} VND. "
+                f"Hoá đơn {invoice.id} đã thanh toán {int(final_price):,} VND. "
                 f"Hết hạn: {sub.expires_at.isoformat(timespec='minutes')}."
             ),
             payload={
                 "invoice_id": invoice.id,
                 "subscription_id": sub.id,
                 "plan_code": plan.code,
-                "amount_vnd": int(plan.price_vnd),
+                "amount_vnd": int(final_price),
+                "discount_vnd": int(discount_vnd),
+                "coupon_code": coupon_obj.code if coupon_obj is not None else None,
                 "expires_at": sub.expires_at.isoformat(),
             },
         )

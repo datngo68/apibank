@@ -23,7 +23,13 @@ from packages.banks import poll_kick
 from packages.billing import subscription as subscription_pkg
 from packages.billing import topup as topup_pkg
 from packages.billing import wallet as wallet_pkg
+from packages.billing.coupons import preview as coupon_preview
 from packages.billing.errors import (
+    CouponAlreadyRedeemedError,
+    CouponExhaustedError,
+    CouponExpiredError,
+    CouponNotApplicableError,
+    CouponNotFoundError,
     InsufficientFundsError,
     PlanNotFoundError,
     SystemBankNotConfiguredError,
@@ -52,6 +58,8 @@ from packages.schemas.me import (
     BankAccountRead,
     BankAccountRotate,
     BankAccountUpdate,
+    CouponPreviewRequest,
+    CouponPreviewResponse,
     InvoiceRead,
     MeApiKeyCreate,
     MeApiKeyCreated,
@@ -1115,9 +1123,19 @@ async def purchase_subscription(
             user=user,
             plan_code=payload.plan_code,
             idempotency_key=f"sub:{user.id}:{payload.plan_code}:{secrets.token_hex(8)}",
+            coupon_code=payload.coupon_code,
         )
     except PlanNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CouponNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (
+        CouponExpiredError,
+        CouponExhaustedError,
+        CouponAlreadyRedeemedError,
+        CouponNotApplicableError,
+    ) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InsufficientFundsError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
     await record_audit(
@@ -1127,12 +1145,53 @@ async def purchase_subscription(
         target_type="subscription",
         target_id=sub.id,
         ip=request.client.host if request.client else None,
-        after={"plan_code": payload.plan_code},
+        after={
+            "plan_code": payload.plan_code,
+            "coupon_code": payload.coupon_code,
+        },
     )
     await session.commit()
     out = SubscriptionRead.model_validate(sub, from_attributes=True)
     out.plan_code = payload.plan_code
     return out
+
+
+@router.post("/coupons/preview", response_model=CouponPreviewResponse)
+async def preview_coupon(
+    payload: CouponPreviewRequest,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CouponPreviewResponse:
+    """Tính trước số tiền sau giảm. Không ghi DB."""
+    try:
+        plan = await subscription_pkg.get_plan(session, payload.plan_code)
+    except PlanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    try:
+        breakdown = await coupon_preview(
+            session,
+            code=payload.code,
+            user_id=user.id,
+            plan_code=plan.code,
+            amount_vnd=Decimal(plan.price_vnd),
+        )
+    except CouponNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (
+        CouponExpiredError,
+        CouponExhaustedError,
+        CouponAlreadyRedeemedError,
+        CouponNotApplicableError,
+    ) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return CouponPreviewResponse(
+        code=breakdown.code,
+        plan_code=plan.code,
+        discount_type=breakdown.discount_type,
+        original_amount_vnd=breakdown.original_amount_vnd,
+        discount_vnd=breakdown.discount_vnd,
+        final_amount_vnd=breakdown.final_amount_vnd,
+    )
 
 
 @router.get("/invoices", response_model=list[InvoiceRead])

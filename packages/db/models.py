@@ -409,6 +409,81 @@ class Invoice(Base):
     wallet_tx_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     issued_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    coupon_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    discount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0), default=Decimal(0))
+    original_amount_vnd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 0), nullable=True
+    )
+
+
+class Coupon(Base):
+    """Mã giảm giá áp dụng khi mua/đổi subscription.
+
+    - `discount_type`: 'percent' (`percent_off` 1..100) hoặc 'fixed'
+      (`amount_off_vnd`).
+    - `max_discount_vnd`: trần discount khi `percent` (NULL = không trần).
+    - `plan_codes_json`: list plan_code áp dụng; rỗng/None → mọi plan.
+    - `redeemed_count` increment có guard `< max_redemptions` để tránh race.
+    """
+
+    __tablename__ = "coupons"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_coupons_code"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cpn_{secrets.token_urlsafe(12)}"
+    )
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discount_type: Mapped[str] = mapped_column(String(16))  # percent | fixed
+    percent_off: Mapped[int | None] = mapped_column(nullable=True)
+    amount_off_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
+    max_discount_vnd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 0), nullable=True
+    )
+    min_amount_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
+    max_redemptions: Mapped[int | None] = mapped_column(nullable=True)
+    max_per_user: Mapped[int] = mapped_column(default=1)
+    redeemed_count: Mapped[int] = mapped_column(default=0)
+    valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    valid_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    plan_codes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(default=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CouponRedemption(Base):
+    """Audit trail: mỗi lần một user redeem coupon thành công."""
+
+    __tablename__ = "coupon_redemptions"
+    __table_args__ = (
+        Index("ix_coupon_redemptions_coupon_user", "coupon_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"crd_{secrets.token_urlsafe(12)}"
+    )
+    coupon_id: Mapped[str] = mapped_column(ForeignKey("coupons.id"), index=True)
+    coupon_code: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    invoice_id: Mapped[str | None] = mapped_column(
+        ForeignKey("invoices.id"), nullable=True
+    )
+    subscription_id: Mapped[str | None] = mapped_column(
+        ForeignKey("subscriptions.id"), nullable=True
+    )
+    plan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    amount_before_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
+    discount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
+    amount_after_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
 
 
 class WalletTransaction(Base):
