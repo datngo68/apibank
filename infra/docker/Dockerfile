@@ -12,7 +12,7 @@ RUN npm run build
 ###############################################################################
 # Stage 2 — build python wheels
 ###############################################################################
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libffi-dev \
@@ -25,7 +25,7 @@ RUN pip install --upgrade pip && pip wheel --wheel-dir /wheels -e .
 ###############################################################################
 # Stage 3 — runtime
 ###############################################################################
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     APIBANK_EMBED_WORKERS=1
 WORKDIR /app
