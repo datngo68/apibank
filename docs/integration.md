@@ -146,10 +146,14 @@ Idempotency-Key: order-2026-05-17-0001
 Hiển thị thanh toán cho khách:
 
 - **Landing có sẵn QR**: redirect khách đến `https://pay.example.com/pay/APIB7K3M2A`.
-- **QR raw VietQR**: nhúng `<img src="https://pay.example.com/qr/APIB7K3M2A.png">`.
+- **QR raw VietQR**: nhúng `<img src="https://pay.example.com/qr/ord_01HXXXX....png">`
+  (dùng `id` của order, **không phải** `code`).
 - **Polling status (fallback)**: `GET /pay/APIB7K3M2A/status` →
   `{ "status": "pending" | "paid" | "expired" | "cancelled" }`.
-- **Realtime SSE**: `GET /pay/APIB7K3M2A/events` (server-sent events).
+
+> Endpoint SSE realtime hiện chỉ phục vụ luồng topup ví của user dashboard
+> (`GET /api/v1/me/topup/{code}/events`, cookie session). Cho merchant tích
+> hợp, dùng webhook `payment.succeeded` (mục 4) hoặc poll `/pay/{code}/status`.
 
 ### Hủy order
 

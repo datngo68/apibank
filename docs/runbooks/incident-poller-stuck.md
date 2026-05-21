@@ -24,5 +24,10 @@ docker compose logs api --tail=200 | grep poll
 
 ## Roll back
 
-- Tắt account: `UPDATE bank_accounts SET polling_enabled = false WHERE id = ...`
-- Bật lại sau khi sửa: cập nhật credential bằng `POST /api/v1/me/bank-accounts/{id}/rotate`.
+- **Tạm dừng poll** (giữ data, dùng app mobile bình thường):
+  `PATCH /api/v1/me/bank-accounts/{id}` body `{"polling_enabled": false}`
+  (hoặc bấm nút **Tạm ngắt** trên dashboard Bank accounts). Bật lại khi sẵn sàng.
+- **Disable cứng** (route khẩn cấp): `UPDATE bank_accounts SET polling_enabled = false WHERE id = ...`.
+- **Cập nhật credential** sau khi sửa: `POST /api/v1/me/bank-accounts/{id}/rotate`.
+- **Verify** trước khi mở lại poll: `POST /api/v1/me/bank-accounts/{id}/verify` —
+  trả `{verified, last_login_at}` để chắc credential hợp lệ.

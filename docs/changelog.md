@@ -2,6 +2,45 @@
 
 Tuân theo [keep-a-changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Added
+
+- **Coupons / mã giảm giá**: admin CRUD `/api/v1/admin/coupons` (list, create,
+  patch, delete, redemptions) + user preview `POST /api/v1/me/coupons/preview`
+  để tính giá sau giảm trước khi mua subscription. Dashboard subscription dùng
+  preview để hiển thị giá real-time.
+- **Bank account verify endpoint**: `POST /api/v1/me/bank-accounts/{id}/verify`
+  thử login MB/Vietinbank ngay lập tức, trả `{verified, last_login_at}`. UI
+  hiện ô check xanh khi credential hợp lệ.
+- **Pause/resume polling per bank account**: `PATCH /api/v1/me/bank-accounts/{id}`
+  với `{polling_enabled: bool}`. Khi user dùng app mobile MB song song có thể
+  tạm ngắt poll để không bị kick session, sau đó "Kết nối lại". Worker tự
+  rescan task qua Redis pub/sub `bank:account:added` (kèm safety net 30s).
+- **`/v1/bank-accounts` (Bearer API key)**: list bank accounts của user qua
+  scope mới `bank_accounts:read`. Cho merchant tích hợp render dropdown chọn
+  bank account khi tạo order thay vì paste UUID.
+- **Worker hot-reload**: thêm/xóa/tạm ngắt bank account không cần restart
+  worker; rescan trigger từ admin/me route + listener `bank:account:added`.
+- **Notification preferences**: `GET/PUT /api/v1/me/notification-preferences`
+  cho user toggle channel email/telegram/in-app theo từng `kind`.
+
+### Changed
+
+- **Webhook scheduler tick** từ 10s → **30s**, kèm Redis pub/sub `webhook:kick`
+  (debounce 200ms) để gửi near-realtime khi attempt vừa tạo. Cron 30s là
+  safety-net cho trường hợp Redis unavailable hoặc miss message.
+- **Topup tối thiểu** giảm từ 10.000 VND → **2.000 VND** để hỗ trợ test thật
+  với chi phí thấp.
+- **Docker image source**: mặc định pull `ghcr.io/datngo68/apibank` +
+  `apibank-caddy` từ ghcr.io trong `docker-compose.yml`. Build local vẫn được
+  qua override `docker-compose.build.yml` (`USE_BUILD=1`).
+
+### Fixed
+
+- **`docs/openapi.json`** đã regen đầy đủ 87 paths (trước đây thiếu coupons,
+  pause/resume, verify, topups:check, /v1/bank-accounts, notification-preferences).
+
 ## [0.1.0] — 2026-05-17
 
 ### Security (audit 2026-05-17)

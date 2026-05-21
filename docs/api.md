@@ -65,8 +65,9 @@ Số lượng path tự sinh từ OpenAPI:
 | `/v1/bank-accounts` | List bank accounts của user (cho UI integration) | Bearer + scope `bank_accounts:read` |
 | `/v1/webhooks` (admin scope) | Quản lý webhook hệ thống | Bearer + `admin:*` |
 | `/api/v1/telegram/webhook` | Telegram bot inbound | secret token header |
-| `/pay/{code}`, `/pay/{code}/status`, `/pay/{code}/events` | Payment landing + SSE | none / signed code |
-| `/qr/{...}` | VietQR PNG | none |
+| `/pay/{code}`, `/pay/{code}/status` | Payment landing + JSON polling | none / signed code |
+| `/qr/{order_id}.png` | VietQR PNG (theo order **id**, không phải code) | none |
+| `/api/v1/me/topup/{code}/events` | SSE realtime cho topup ví (dashboard only) | cookie + CSRF |
 
 Để xem schema chi tiết:
 

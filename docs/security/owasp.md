@@ -35,11 +35,11 @@ Bản đối chiếu tại 0.1.0 (sau security hardening 2026-05-17). Mỗi mụ
 | HIGH | Email enumeration ở `/register` (409 leak) | `apps/api/routes/auth.py:136-141` | Đã fix — luôn 201, gửi email cảnh báo cho user thật. |
 | HIGH | IDOR `/v1/orders/{id}`, `/v1/transactions` không filter theo user_id | `apps/api/routes/{orders,transactions}.py` | Đã fix — `assert_bank_account_owned`, repository filter. |
 | HIGH | Subscription gate chỉ áp `POST /v1/orders` | `apps/api/routes/orders.py` | Đã fix — áp lên mọi route `/v1/*`. |
-| HIGH | `require_scope` bug: dùng default value thay vì Depends | `packages/security/dependencies.py:30-37` | Đã fix. |
+| HIGH | `require_scope` bug: dùng default value thay vì Depends | `apps/api/routes/{orders,webhooks}.py` (helper `_require_scope`) | Đã fix. |
 | HIGH | Admin Jinja UI `/admin/*` không CSRF, login bằng API key, raw key qua URL | `apps/api/routes/admin_ui.py` | Đã xoá toàn bộ; SPA admin (`/app/admin/*`) là đường duy nhất. |
 | HIGH | Webhook SSRF: gọi private IP/IMDS | `packages/webhook/dispatcher.py` | Đã fix — `is_safe_webhook_url` + `follow_redirects=False`. |
 | HIGH | Rate-limit Redis down → no-limit forever | `apps/api/middleware/rate_limit.py:27-44` | Đã fix — fallback in-memory + retry sau 60s. |
-| HIGH | `ApiKey.expires_at` không enforce ở resolver | `packages/security/idempotency.py:13-18` | Đã fix — kiểm `expires_at < now` ở `authenticated_api_key`. |
+| HIGH | `ApiKey.expires_at` không enforce ở resolver | `packages/security/api_keys.py::resolve_api_key` | Đã fix — kiểm `expires_at < now` ở `authenticated_api_key`. |
 | MEDIUM | SPA path traversal | `apps/api/spa.py:95-112` | Đã fix — `is_relative_to(WEB_DIST.resolve())`. |
 | MEDIUM | TOTP code có thể dùng lại trong cửa sổ 90s | `packages/security/twofa.py` | Đã fix — `last_totp_code/last_totp_used_at` trong `TwoFactor`. |
 | MEDIUM | Webhook IP allowlist semantics sai (outbound) | `packages/db/models.py::Webhook` | Đã ngừng dùng — UI và schema bỏ field; cột giữ nullable cho legacy. |

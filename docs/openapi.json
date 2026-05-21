@@ -1048,6 +1048,157 @@
         ]
       }
     },
+    "/api/v1/me/bank-accounts/{bank_account_id}/verify": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Verify Bank Account",
+        "description": "Thử login bank ngay với credential đã lưu.\n\nNếu OK: set ``verified_at = now``, trả 200 + bank record (UI hiện tích xanh).\nNếu fail: lưu ``last_error``, trả 422 với chi tiết để user sửa credential.",
+        "operationId": "verify_bank_account_api_v1_me_bank_accounts__bank_account_id__verify_post",
+        "parameters": [
+          {
+            "name": "bank_account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankAccountRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/bank-accounts/{bank_account_id}": {
+      "patch": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Update Bank Account",
+        "description": "Pause/resume polling cho 1 bank account.\n\nUse case chính: user muốn dùng app mobile của ngân hàng (chuyển tiền,\nđổi mật khẩu) — bật `polling_enabled=false` để worker bỏ task poll, MB\nkhông kick session mobile. Khi xong, bật lại `true` và worker tự pickup\nqua kênh pubsub (best-effort) hoặc tick rescan kế tiếp.",
+        "operationId": "update_bank_account_api_v1_me_bank_accounts__bank_account_id__patch",
+        "parameters": [
+          {
+            "name": "bank_account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankAccountUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankAccountRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Delete Bank Account",
+        "operationId": "delete_bank_account_api_v1_me_bank_accounts__bank_account_id__delete",
+        "parameters": [
+          {
+            "name": "bank_account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericMessage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/me/bank-accounts/{bank_account_id}/rotate": {
       "post": {
         "tags": [
@@ -1083,53 +1234,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BankAccountRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/api/v1/me/bank-accounts/{bank_account_id}": {
-      "delete": {
-        "tags": [
-          "me"
-        ],
-        "summary": "Delete Bank Account",
-        "operationId": "delete_bank_account_api_v1_me_bank_accounts__bank_account_id__delete",
-        "parameters": [
-          {
-            "name": "bank_account_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Bank Account Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GenericMessage"
                 }
               }
             }
@@ -1824,6 +1928,54 @@
         ]
       }
     },
+    "/api/v1/me/topups/{order_id}:check": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Check Pending Topup",
+        "description": "User bấm \"Tôi đã chuyển khoản\" — kick worker poll ngay rồi đợi check.\n\nFlow:\n  1. Verify order tồn tại + thuộc về user + là topup.\n  2. Nếu đã ``paid`` → trả ngay với balance hiện tại.\n  3. Nếu ``pending`` → ``poll_kick.kick(bank_id)`` để worker thoát sleep\n     poll_interval, fetch tx mới ngay. BE poll DB mỗi 0.5s, đợi tối đa\n     12s xem order có chuyển ``paid`` không.\n  4. Hết thời gian vẫn ``pending`` → trả ``pending`` + message hướng dẫn.\n\nIdempotent: gọi nhiều lần an toàn (chỉ kick poll loop, không tạo order/tx).\nAudit: ghi action ``topup.check`` để admin trace user lạm dụng.",
+        "operationId": "check_pending_topup_api_v1_me_topups__order_id__check_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Order Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/me/subscription": {
       "get": {
         "tags": [
@@ -1882,6 +2034,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SubscriptionRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/coupons/preview": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Preview Coupon",
+        "description": "Tính trước số tiền sau giảm. Không ghi DB.",
+        "operationId": "preview_coupon_api_v1_me_coupons_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponPreviewResponse"
                 }
               }
             }
@@ -2257,6 +2456,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GenericMessage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/notification-preferences": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List Notification Preferences",
+        "description": "Trả về toàn bộ matrix prefs (kind x channel).\n\nHợp nhất default channels (xem `packages.notifications.dispatcher.DEFAULT_CHANNELS`)\nvới prefs đã ghi DB. Nếu user chưa override → enabled = (channel có trong default\ncủa kind đó).",
+        "operationId": "list_notification_preferences_api_v1_me_notification_preferences_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferenceList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Update Notification Preferences",
+        "description": "Bulk upsert prefs. Mỗi item ghi đè cặp (user, kind, channel).",
+        "operationId": "update_notification_preferences_api_v1_me_notification_preferences_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferenceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferenceList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2827,6 +3098,65 @@
                     "type": "string"
                   },
                   "title": "Response Replay Attempt V1 Webhooks Attempts  Attempt Id  Replay Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/bank-accounts": {
+      "get": {
+        "tags": [
+          "bank-accounts"
+        ],
+        "summary": "List Bank Accounts",
+        "description": "List bank accounts visible to the API key's user.\n\n- Scope ``bank_accounts:read`` (or ``admin:*``) required.\n- Non-admin keys: chỉ thấy bank accounts của user gắn với key.\n- Admin keys (``admin:*``): thấy tất cả (dùng cho ops console / SDK admin).\n- Legacy keys không gắn user_id: bypass filter để giữ tương thích\n  single-tenant trước Phase 2.",
+        "operationId": "list_bank_accounts_v1_bank_accounts_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BankAccountRead"
+                  },
+                  "title": "Response List Bank Accounts V1 Bank Accounts Get"
                 }
               }
             }
@@ -3479,6 +3809,268 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GenericMessage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/coupons": {
+      "get": {
+        "tags": [
+          "admin-console"
+        ],
+        "summary": "Admin List Coupons",
+        "operationId": "admin_list_coupons_api_v1_admin_coupons_get",
+        "parameters": [
+          {
+            "name": "active_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Active Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCouponRead"
+                  },
+                  "title": "Response Admin List Coupons Api V1 Admin Coupons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin-console"
+        ],
+        "summary": "Admin Create Coupon",
+        "operationId": "admin_create_coupon_api_v1_admin_coupons_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCouponCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCouponRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/coupons/{coupon_id}": {
+      "patch": {
+        "tags": [
+          "admin-console"
+        ],
+        "summary": "Admin Update Coupon",
+        "operationId": "admin_update_coupon_api_v1_admin_coupons__coupon_id__patch",
+        "parameters": [
+          {
+            "name": "coupon_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Coupon Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCouponUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCouponRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin-console"
+        ],
+        "summary": "Admin Delete Coupon",
+        "description": "Xoá vĩnh viễn nếu chưa có redemption, ngược lại trả 409.\n\nAdmin nên `active=false` thay vì xoá khi đã có người dùng để giữ audit.",
+        "operationId": "admin_delete_coupon_api_v1_admin_coupons__coupon_id__delete",
+        "parameters": [
+          {
+            "name": "coupon_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Coupon Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericMessage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/coupons/{coupon_id}/redemptions": {
+      "get": {
+        "tags": [
+          "admin-console"
+        ],
+        "summary": "Admin List Coupon Redemptions",
+        "operationId": "admin_list_coupon_redemptions_api_v1_admin_coupons__coupon_id__redemptions_get",
+        "parameters": [
+          {
+            "name": "coupon_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Coupon Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCouponRedemptionRead"
+                  },
+                  "title": "Response Admin List Coupon Redemptions Api V1 Admin Coupons  Coupon Id  Redemptions Get"
                 }
               }
             }
@@ -4391,6 +4983,478 @@
         ],
         "title": "AdminBankAccountRead"
       },
+      "AdminCouponCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 2,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Code"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "discount_type": {
+            "type": "string",
+            "pattern": "^(percent|fixed)$",
+            "title": "Discount Type"
+          },
+          "percent_off": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Off"
+          },
+          "amount_off_vnd": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Off Vnd"
+          },
+          "max_discount_vnd": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Discount Vnd"
+          },
+          "min_amount_vnd": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Amount Vnd"
+          },
+          "max_redemptions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Redemptions"
+          },
+          "max_per_user": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Per User",
+            "default": 1
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "plan_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plan Codes"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "discount_type"
+        ],
+        "title": "AdminCouponCreate"
+      },
+      "AdminCouponRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "discount_type": {
+            "type": "string",
+            "title": "Discount Type"
+          },
+          "percent_off": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Off"
+          },
+          "amount_off_vnd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Off Vnd"
+          },
+          "max_discount_vnd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Discount Vnd"
+          },
+          "min_amount_vnd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Amount Vnd"
+          },
+          "max_redemptions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Redemptions"
+          },
+          "max_per_user": {
+            "type": "integer",
+            "title": "Max Per User"
+          },
+          "redeemed_count": {
+            "type": "integer",
+            "title": "Redeemed Count"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "plan_codes_json": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plan Codes Json"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "description",
+          "discount_type",
+          "percent_off",
+          "amount_off_vnd",
+          "max_discount_vnd",
+          "min_amount_vnd",
+          "max_redemptions",
+          "max_per_user",
+          "redeemed_count",
+          "valid_from",
+          "valid_until",
+          "plan_codes_json",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AdminCouponRead"
+      },
+      "AdminCouponRedemptionRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "coupon_code": {
+            "type": "string",
+            "title": "Coupon Code"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "invoice_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoice Id"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          },
+          "plan_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Code"
+          },
+          "amount_before_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount Before Vnd"
+          },
+          "discount_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount Vnd"
+          },
+          "amount_after_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount After Vnd"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "coupon_code",
+          "user_id",
+          "invoice_id",
+          "subscription_id",
+          "plan_code",
+          "amount_before_vnd",
+          "discount_vnd",
+          "amount_after_vnd",
+          "created_at"
+        ],
+        "title": "AdminCouponRedemptionRead"
+      },
+      "AdminCouponUpdate": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "max_redemptions": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Redemptions"
+          },
+          "max_per_user": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Per User"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "plan_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Codes"
+          },
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          }
+        },
+        "type": "object",
+        "title": "AdminCouponUpdate"
+      },
       "AdminPlanCreate": {
         "properties": {
           "code": {
@@ -5172,6 +6236,20 @@
         ],
         "title": "BankAccountRotate"
       },
+      "BankAccountUpdate": {
+        "properties": {
+          "polling_enabled": {
+            "type": "boolean",
+            "title": "Polling Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "polling_enabled"
+        ],
+        "title": "BankAccountUpdate",
+        "description": "Toggle polling tạm thời (pause khi user chuyển tiền trên app mobile)."
+      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -5193,6 +6271,69 @@
           "new_password"
         ],
         "title": "ChangePasswordRequest"
+      },
+      "CouponPreviewRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Code"
+          },
+          "plan_code": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Plan Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "plan_code"
+        ],
+        "title": "CouponPreviewRequest"
+      },
+      "CouponPreviewResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "plan_code": {
+            "type": "string",
+            "title": "Plan Code"
+          },
+          "discount_type": {
+            "type": "string",
+            "title": "Discount Type"
+          },
+          "original_amount_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Original Amount Vnd"
+          },
+          "discount_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount Vnd"
+          },
+          "final_amount_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Final Amount Vnd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "plan_code",
+          "discount_type",
+          "original_amount_vnd",
+          "discount_vnd",
+          "final_amount_vnd"
+        ],
+        "title": "CouponPreviewResponse"
       },
       "ForgotPasswordRequest": {
         "properties": {
@@ -5329,6 +6470,35 @@
             "type": "string",
             "format": "date-time",
             "title": "Issued At"
+          },
+          "coupon_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
+          },
+          "discount_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Discount Vnd",
+            "default": "0"
+          },
+          "original_amount_vnd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Amount Vnd"
           }
         },
         "type": "object",
@@ -5800,6 +6970,87 @@
         },
         "type": "object",
         "title": "MeWebhookUpdate"
+      },
+      "NotificationPreferenceItem": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "channel",
+          "enabled"
+        ],
+        "title": "NotificationPreferenceItem",
+        "description": "Một dòng matrix: với `kind` này, kênh `channel` có bật hay không."
+      },
+      "NotificationPreferenceList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferenceList",
+        "description": "Trả về toàn bộ matrix prefs để FE render bảng."
+      },
+      "NotificationPreferenceUpdate": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceUpdateItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferenceUpdate",
+        "description": "Bulk upsert matrix prefs."
+      },
+      "NotificationPreferenceUpdateItem": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "channel",
+          "enabled"
+        ],
+        "title": "NotificationPreferenceUpdateItem"
       },
       "NotificationRead": {
         "properties": {
@@ -6448,6 +7699,18 @@
             "maxLength": 32,
             "minLength": 1,
             "title": "Plan Code"
+          },
+          "coupon_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Code"
           }
         },
         "type": "object",
@@ -6635,12 +7898,58 @@
         ],
         "title": "TelegramRegisterWebhookResponse"
       },
+      "TopupCheckResponse": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "balance_vnd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balance Vnd"
+          },
+          "waited_ms": {
+            "type": "integer",
+            "title": "Waited Ms",
+            "default": 0
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "code",
+          "status",
+          "message"
+        ],
+        "title": "TopupCheckResponse",
+        "description": "Kết quả của nút \"Tôi đã chuyển khoản\" — force-check 1 đơn topup.\n\n- ``status``: trạng thái mới nhất sau khi đã kick poll worker và đợi\n  tối đa ``waited_ms`` ms. Có thể là ``pending`` (chưa thấy giao dịch),\n  ``paid`` (đã match + credit ví) hoặc ``expired/canceled``.\n- ``balance_vnd``: số dư ví sau credit, chỉ có khi ``status=\"paid\"``.\n- ``waited_ms``: BE thực sự đã đợi bao lâu (FE dùng để hiển thị toast).\n- ``message``: text gợi ý tiếng Việt cho FE hiển thị nhanh."
+      },
       "TopupCreateRequest": {
         "properties": {
           "amount_vnd": {
             "type": "integer",
             "maximum": 50000000.0,
-            "minimum": 10000.0,
+            "minimum": 2000.0,
             "title": "Amount Vnd"
           }
         },
@@ -6969,12 +8278,17 @@
           "otpauth_uri": {
             "type": "string",
             "title": "Otpauth Uri"
+          },
+          "qr_data_uri": {
+            "type": "string",
+            "title": "Qr Data Uri"
           }
         },
         "type": "object",
         "required": [
           "secret",
-          "otpauth_uri"
+          "otpauth_uri",
+          "qr_data_uri"
         ],
         "title": "TwoFactorEnrollResponse"
       },

@@ -15,12 +15,16 @@
               Redis (rate limit + quota) ◄─────────────────┘
                                                            │
                           ┌────────────────────────────────┴───────────────────┐
-                          │ Embedded async tasks (lifespan)                    │
+                          │ Embedded async tasks (lifespan, opt-in qua APIBANK_EMBED_WORKERS=1) │
                           │  • run_poller_loop  (apps/worker)                  │
                           │  • start_scheduler  (apps/scheduler) — APScheduler │
                           │      ├─ reconcile every 5m                         │
-                          │      ├─ webhook dispatcher every 10s               │
-                          │      └─ expire-subscriptions hourly                │
+                          │      ├─ webhook dispatcher every 30s               │
+                          │      │   + Redis pub/sub `webhook:kick`            │
+                          │      │     (near-realtime, debounce 200ms)         │
+                          │      ├─ notification dispatcher every 5s           │
+                          │      ├─ expire-subscriptions every 1h              │
+                          │      └─ subscription expiring-soon every 12h       │
                           └────────────────────────────────────────────────────┘
 ```
 
@@ -58,5 +62,10 @@
 ## Deploy
 
 - Multi-stage Dockerfile: Node build SPA → Python image. Container run `apimb start`.
-- docker-compose: api + postgres + redis + caddy + prometheus + grafana + (optional) node-bridge.
-- GitHub Actions: ci (lint/test/build), e2e (placeholder), nightly (audit), release (push image trên tag).
+- docker-compose: api + worker + scheduler (process tách riêng, `APIBANK_EMBED_WORKERS=0`)
+  + postgres + redis + caddy + (profile `observability`) prometheus + grafana + loki + promtail
+  + (profile `fallback`) node-bridge.
+- Image pull mặc định từ `ghcr.io/datngo68/apibank` + `apibank-caddy`; có
+  `docker-compose.build.yml` để build local khi test code chưa tag.
+- GitHub Actions: ci (lint/test/build), nightly (pip-audit + npm audit, fail high+),
+  release (build + push ghcr.io image trên tag).

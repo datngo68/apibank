@@ -48,9 +48,17 @@ curl.exe -X POST "http://127.0.0.1:8000/v1/orders" `
 
 Phản hồi 201 với `code` (ví dụ `DH4FK9A2`). Nội dung này là cái user phải gõ khi chuyển khoản.
 
-## 4. Sinh QR cho đơn (optional)
+## 4. Sinh QR cho đơn
 
-Hiện chưa có endpoint sinh QR; gọi trực tiếp Python:
+Endpoint sẵn có:
+
+```
+GET /qr/{order_id}.png
+```
+
+Trả VietQR PNG generate local (không phụ thuộc dịch vụ ngoài). Lưu ý dùng
+**order_id** (`ord_01HXXXX...`), không phải `code`. Hoặc gọi trực tiếp Python
+nếu chỉ cần payload text:
 
 ```powershell
 python -c "from packages.qr.vietqr import generate_vietqr_payload; print(generate_vietqr_payload(bank_bin='970422', account_no='0011223344', amount_vnd=10000, content='DH4FK9A2'))"
@@ -68,7 +76,9 @@ python -m apps.worker.main
 
 Worker sẽ:
 - Login MB bằng `mbbank-lib` (5-10s lần đầu để tải WASM/ONNX).
-- Poll mỗi 20s, ghi log JSON.
+- Poll mỗi `APIBANK_POLL_INTERVAL` giây — mặc định **60s** ở `.env.example` (dev,
+  giảm xung đột với app mobile MB), **20s** ở `infra/docker/.env.production.example`.
+- Ghi log JSON.
 
 **Cảnh báo**: nếu login fail liên tiếp, dừng worker ngay. Có thể MB đã đổi WASM.
 
@@ -91,7 +101,9 @@ Terminal thứ 3:
 python -m apps.scheduler.main
 ```
 
-Scheduler bắn webhook đến `webhook.site` mỗi 10s. Mở URL `webhook.site` trên trình duyệt, sẽ thấy POST đến với:
+Scheduler bắn webhook mỗi **30s** (cron tick) **+ near-realtime qua Redis pub/sub
+`webhook:kick`** (debounce 200ms) — nếu Redis sẵn, attempt vừa được tạo sẽ
+được gửi gần như tức thì. Mở URL `webhook.site` trên trình duyệt, sẽ thấy POST đến với:
 - Header `X-Signature: t=<unix>,v1=<hmac-sha256>`.
 - Body JSON `{"id": "evt_...", "type": "payment.succeeded", "data": {...}}`.
 

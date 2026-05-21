@@ -85,6 +85,6 @@ Mỗi bước log timestamp, tổng < 90s end-to-end.
 ## 12. Disaster recovery doc
 
 - [ ] `docs/runbooks/incident-poller-stuck.md`.
-- [ ] `docs/runbooks/incident-webhook-storm.md`.
-- [ ] `docs/runbooks/rotate-fernet.md`.
+- [ ] `docs/runbooks/webhook-dead-letter-flood.md`.
+- [ ] `docs/runbooks/rotate-fernet-key.md`.
 - [ ] On-call rotation set up (Slack/PagerDuty).
