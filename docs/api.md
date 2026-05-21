@@ -74,7 +74,9 @@ Số lượng path tự sinh từ OpenAPI:
 ```powershell
 python scripts/dump_openapi.py   # ghi docs/openapi.json
 # Hoặc serve qua Swagger UI khi `apimb start`:
-# http://localhost:8000/docs
+# http://localhost:8000/api/docs       (Swagger)
+# http://localhost:8000/api/redoc      (Redoc)
+# http://localhost:8000/api/openapi.json
 ```
 
 ## Tóm tắt thay đổi 0.1.0

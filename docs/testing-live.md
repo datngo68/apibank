@@ -31,7 +31,7 @@ Script tự sinh `APIBANK_FERNET_KEYS` và `APIBANK_API_KEY_SALT` vào `.env` n�
 python -m uvicorn apps.api.main:app --reload
 ```
 
-API ở `http://127.0.0.1:8000`. Mở `http://127.0.0.1:8000/docs` để xem Swagger.
+API ở `http://127.0.0.1:8000`. Mở `http://127.0.0.1:8000/api/docs` để xem Swagger.
 
 ## 3. Test tạo đơn
 

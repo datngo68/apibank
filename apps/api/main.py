@@ -13,6 +13,7 @@ from apps.api.middleware.csrf import CsrfMiddleware
 from apps.api.middleware.http_metrics import HttpMetricsMiddleware
 from apps.api.middleware.rate_limit import RateLimitMiddleware
 from apps.api.middleware.security_headers import SecurityHeadersMiddleware
+from apps.api.middleware.usage_metering import UsageMeteringMiddleware
 from apps.api.routes.admin_console import router as admin_console_router
 from apps.api.routes.auth import router as auth_router
 from apps.api.routes.bank_accounts import router as bank_accounts_router
@@ -64,7 +65,15 @@ def create_app() -> FastAPI:
                 except TimeoutError:
                     task.cancel()
 
-    app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title=settings.app_name,
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+        swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
+    )
     cookie_secure = settings.cookie_secure_effective
     app.add_middleware(
         SessionMiddleware,
@@ -77,6 +86,7 @@ def create_app() -> FastAPI:
     app.add_middleware(CsrfMiddleware, secure=cookie_secure)
     app.add_middleware(SecurityHeadersMiddleware, environment=settings.environment)
     app.add_middleware(HttpMetricsMiddleware)
+    app.add_middleware(UsageMeteringMiddleware)
     app.include_router(health_router)
     app.include_router(metrics_router)
     app.include_router(auth_router)

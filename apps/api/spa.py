@@ -35,9 +35,6 @@ _API_PREFIXES: tuple[str, ...] = (
     "/qr/",
     "/pay/",
     "/static/",
-    "/openapi.json",
-    "/docs",
-    "/redoc",
 )
 
 

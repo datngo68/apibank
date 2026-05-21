@@ -565,7 +565,7 @@ function NextStepsSection() {
         <li>
           Mở{" "}
           <a
-            href="/docs"
+            href="/api/docs"
             target="_blank"
             rel="noreferrer"
             className="text-primary hover:underline"

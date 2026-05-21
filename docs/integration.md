@@ -495,7 +495,8 @@ hiển thị QR ở `thankyou` page, listen webhook ở custom REST route, set o
 
 ## 11. Tham khảo nhanh
 
-- Swagger UI: `http://localhost:8000/docs` (chỉ bật khi `DEBUG=true`).
+- Swagger UI: `http://localhost:8000/api/docs` (chỉ bật khi `DEBUG=true`).
+- Redoc: `http://localhost:8000/api/redoc`.
 - OpenAPI JSON: `docs/openapi.json` — sinh bằng `python scripts/dump_openapi.py`.
 - API reference: [`docs/api.md`](./api.md).
 - Architecture: [`docs/architecture.md`](./architecture.md).

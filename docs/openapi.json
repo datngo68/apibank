@@ -5751,6 +5751,28 @@
           "bank_accounts": {
             "type": "integer",
             "title": "Bank Accounts"
+          },
+          "revenue_30d_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Revenue 30D Vnd",
+            "default": "0"
+          },
+          "mrr_vnd": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Mrr Vnd",
+            "default": "0"
+          },
+          "api_keys_active": {
+            "type": "integer",
+            "title": "Api Keys Active",
+            "default": 0
+          },
+          "requests_24h": {
+            "type": "integer",
+            "title": "Requests 24H",
+            "default": 0
           }
         },
         "type": "object",
@@ -5869,6 +5891,11 @@
             "type": "integer",
             "title": "Sessions Count"
           },
+          "api_keys_count": {
+            "type": "integer",
+            "title": "Api Keys Count",
+            "default": 0
+          },
           "subscription": {
             "anyOf": [
               {
@@ -5888,6 +5915,14 @@
             },
             "type": "array",
             "title": "Recent Wallet Tx"
+          },
+          "recent_api_keys": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Recent Api Keys"
           }
         },
         "type": "object",
