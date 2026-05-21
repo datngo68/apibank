@@ -34,6 +34,10 @@ POLL_SAFETY_SEC = 30.0        # Khi đã subscribe Redis (an toàn miss message)
 PUBSUB_WAIT_SEC = 1.0         # Block 1s mỗi vòng để cho phép check disconnect
 HEARTBEAT_INTERVAL_SEC = 15.0
 MAX_DURATION_SEC = 30 * 60    # 30 phút
+# Cap SSE concurrent per-user để tránh mở quá nhiều tab → exhaust loop slot.
+MAX_CONCURRENT_PER_USER = 3
+_active_streams: dict[str, int] = {}
+_user_stream_lock = asyncio.Lock()
 
 
 @router.get("/{code}/events")
@@ -61,6 +65,16 @@ async def topup_events(
     owner_email = order.customer_ref
     if owner_id and owner_id != user.id and owner_email != user.email:
         raise HTTPException(status_code=403, detail="forbidden")
+
+    # Cap concurrent stream per user.
+    async with _user_stream_lock:
+        active = _active_streams.get(user.id, 0)
+        if active >= MAX_CONCURRENT_PER_USER:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many concurrent SSE connections; close other tabs",
+            )
+        _active_streams[user.id] = active + 1
 
     sessionmaker = get_sessionmaker()
     order_id = order.id
@@ -155,6 +169,13 @@ async def topup_events(
                         return
         except asyncio.CancelledError:
             return
+        finally:
+            async with _user_stream_lock:
+                cur = _active_streams.get(user.id, 0)
+                if cur <= 1:
+                    _active_streams.pop(user.id, None)
+                else:
+                    _active_streams[user.id] = cur - 1
 
     return StreamingResponse(
         stream(),

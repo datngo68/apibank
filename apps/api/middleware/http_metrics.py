@@ -9,6 +9,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from packages.obs import metrics
+from packages.obs.context import route_var
 
 
 class HttpMetricsMiddleware(BaseHTTPMiddleware):
@@ -25,6 +26,7 @@ class HttpMetricsMiddleware(BaseHTTPMiddleware):
         # Gộp asset paths để tránh nổ cardinality
         if route_path.startswith("/assets/"):
             route_path = "/assets/*"
+        route_var.set(route_path)
         metrics.http_request_duration_seconds.labels(
             method=request.method,
             route=route_path,

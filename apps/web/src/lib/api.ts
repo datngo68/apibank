@@ -439,6 +439,7 @@ export interface AdminUserDetail extends AdminUserListItem {
   telegram_chat_id: string | null;
   bank_accounts_count: number;
   sessions_count: number;
+  api_keys_count: number;
   subscription: {
     id: string;
     plan_code: string | null;
@@ -452,6 +453,15 @@ export interface AdminUserDetail extends AdminUserListItem {
     amount_vnd: string;
     balance_after: string;
     note: string | null;
+    created_at: string;
+  }>;
+  recent_api_keys: Array<{
+    id: string;
+    name: string | null;
+    scopes: string[];
+    last_used_at: string | null;
+    expires_at: string | null;
+    revoked_at: string | null;
     created_at: string;
   }>;
 }
@@ -577,6 +587,10 @@ export interface AdminStats {
   wallet_total_vnd: string;
   subscriptions_active: number;
   bank_accounts: number;
+  revenue_30d_vnd: string;
+  mrr_vnd: string;
+  api_keys_active: number;
+  requests_24h: number;
 }
 
 export interface AdminAuditItem {
@@ -649,6 +663,146 @@ export interface TelegramConfigRead {
 export interface TelegramConfigUpdate {
   bot_token?: string | null;
   enabled: boolean;
+}
+
+// -- Admin API keys / Usage / Revenue ----------------------------------------
+
+export interface AdminApiKeyRead {
+  id: string;
+  user_id: string | null;
+  user_email: string | null;
+  name: string | null;
+  scopes: string[];
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface AdminApiKeyListResponse {
+  items: AdminApiKeyRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminApiKeyCreated extends AdminApiKeyRead {
+  raw_key: string;
+}
+
+export interface AdminUsageEndpointRow {
+  endpoint_group: string;
+  count: number;
+  error_count: number;
+}
+
+export interface AdminUsageUserRow {
+  user_id: string;
+  user_email: string | null;
+  count: number;
+  error_count: number;
+}
+
+export interface AdminUsageSummary {
+  days: number;
+  total_count: number;
+  total_errors: number;
+  unique_users: number;
+  unique_api_keys: number;
+  top_endpoints: AdminUsageEndpointRow[];
+  top_users: AdminUsageUserRow[];
+}
+
+export interface AdminUsageDailyPoint {
+  day: string;
+  count: number;
+  error_count: number;
+}
+
+export interface AdminUsageTimeseries {
+  days: number;
+  user_id: string | null;
+  api_key_id: string | null;
+  points: AdminUsageDailyPoint[];
+}
+
+export interface AdminUsageApiKeyBreakdown {
+  api_key_id: string;
+  name: string | null;
+  count: number;
+  error_count: number;
+}
+
+export interface AdminUserUsageDetail {
+  user_id: string;
+  days: number;
+  total_count: number;
+  total_errors: number;
+  points: AdminUsageDailyPoint[];
+  by_api_key: AdminUsageApiKeyBreakdown[];
+  by_endpoint: AdminUsageEndpointRow[];
+}
+
+export interface AdminRevenueSummary {
+  today_vnd: string;
+  this_month_vnd: string;
+  last_30d_vnd: string;
+  mrr_vnd: string;
+  total_invoices_paid: number;
+  topup_vnd_30d: string;
+  refund_vnd_30d: string;
+  discount_vnd_30d: string;
+}
+
+export interface AdminRevenuePoint {
+  day: string;
+  subscription_vnd: string;
+  topup_vnd: string;
+  refund_vnd: string;
+  discount_vnd: string;
+  net_vnd: string;
+}
+
+export interface AdminRevenueTimeseries {
+  days: number;
+  points: AdminRevenuePoint[];
+}
+
+export interface AdminRevenueByPlanRow {
+  plan_code: string | null;
+  invoices: number;
+  gross_vnd: string;
+  discount_vnd: string;
+  net_vnd: string;
+}
+
+export interface AdminRevenueByCouponRow {
+  coupon_code: string | null;
+  redemptions: number;
+  discount_vnd: string;
+  net_vnd: string;
+}
+
+export interface AdminInvoiceRead {
+  id: string;
+  user_id: string;
+  user_email: string | null;
+  plan_code: string | null;
+  amount_vnd: string;
+  currency: string;
+  status: string;
+  coupon_code: string | null;
+  discount_vnd: string;
+  original_amount_vnd: string | null;
+  issued_at: string;
+}
+
+export interface AdminInvoiceListResponse {
+  items: AdminInvoiceRead[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export const adminEndpoints = {
@@ -761,4 +915,70 @@ export const adminEndpoints = {
     ),
   unlinkTelegramChat: () =>
     api.delete("/api/v1/admin/config/telegram/admin-chat"),
+
+  // api keys
+  listApiKeys: (params?: {
+    user_id?: string;
+    q?: string;
+    revoked?: boolean;
+    limit?: number;
+    offset?: number;
+  }) =>
+    api.get<AdminApiKeyListResponse>("/api/v1/admin/api-keys", { params }),
+  listUserApiKeys: (userId: string) =>
+    api.get<AdminApiKeyRead[]>(`/api/v1/admin/users/${userId}/api-keys`),
+  createUserApiKey: (
+    userId: string,
+    body: { name: string; scopes: string[]; expires_at?: string | null },
+  ) =>
+    api.post<AdminApiKeyCreated>(
+      `/api/v1/admin/users/${userId}/api-keys`,
+      body,
+    ),
+  revokeApiKey: (id: string) =>
+    api.post(`/api/v1/admin/api-keys/${id}/revoke`),
+
+  // usage analytics
+  usageSummary: (days = 7) =>
+    api.get<AdminUsageSummary>("/api/v1/admin/usage/summary", {
+      params: { days },
+    }),
+  usageTimeseries: (params?: {
+    days?: number;
+    user_id?: string;
+    api_key_id?: string;
+  }) =>
+    api.get<AdminUsageTimeseries>("/api/v1/admin/usage/timeseries", { params }),
+  userUsage: (userId: string, days = 30) =>
+    api.get<AdminUserUsageDetail>(
+      `/api/v1/admin/users/${userId}/usage`,
+      { params: { days } },
+    ),
+
+  // revenue
+  revenueSummary: () =>
+    api.get<AdminRevenueSummary>("/api/v1/admin/revenue/summary"),
+  revenueTimeseries: (days = 30) =>
+    api.get<AdminRevenueTimeseries>("/api/v1/admin/revenue/timeseries", {
+      params: { days },
+    }),
+  revenueByPlan: (days = 30) =>
+    api.get<AdminRevenueByPlanRow[]>("/api/v1/admin/revenue/by-plan", {
+      params: { days },
+    }),
+  revenueByCoupon: (days = 30) =>
+    api.get<AdminRevenueByCouponRow[]>("/api/v1/admin/revenue/by-coupon", {
+      params: { days },
+    }),
+  listInvoices: (params?: {
+    user_id?: string;
+    status?: string;
+    plan_code?: string;
+    coupon_code?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  }) =>
+    api.get<AdminInvoiceListResponse>("/api/v1/admin/invoices", { params }),
 };

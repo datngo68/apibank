@@ -240,6 +240,9 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
                     )
                     await session.commit()
                     metrics.poll_success_total.labels(bank=account.bank_code).inc()
+                    metrics.poller_last_success_timestamp.labels(
+                        bank_account_id=account.id
+                    ).set_to_current_time()
                     logger.debug(
                         "poll_tick_ok",
                         extra={

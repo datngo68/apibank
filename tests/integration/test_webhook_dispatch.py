@@ -10,10 +10,17 @@ from tests.helpers.in_memory_db import build_session
 
 def test_schedule_next_uses_exponential_table() -> None:
     base = datetime(2026, 1, 1, tzinfo=UTC)
+    # Jitter ±25% áp dụng cho delay > 0; delay=0 luôn = 0.
     assert (schedule_next(0, now=base) - base).total_seconds() == 0
-    assert (schedule_next(1, now=base) - base).total_seconds() == 30
-    assert (schedule_next(6, now=base) - base).total_seconds() == 86400
-    assert (schedule_next(99, now=base) - base).total_seconds() == 86400
+    # 30s ± 25% → [22.5, 37.5]
+    delay1 = (schedule_next(1, now=base) - base).total_seconds()
+    assert 22.5 <= delay1 <= 37.5
+    # 86400s ± 25% → [64800, 108000]
+    delay6 = (schedule_next(6, now=base) - base).total_seconds()
+    assert 64800 <= delay6 <= 108000
+    # attempt > len(table) clamp về index cuối
+    delay99 = (schedule_next(99, now=base) - base).total_seconds()
+    assert 64800 <= delay99 <= 108000
 
 
 async def _seed_attempt(session) -> WebhookAttempt:  # type: ignore[no-untyped-def]

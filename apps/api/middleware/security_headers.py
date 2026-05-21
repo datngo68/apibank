@@ -19,28 +19,33 @@ import secrets
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import sentry_sdk
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from packages.obs.context import request_id_var, route_var, user_id_var
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     # Ghi chú CSP:
-    # - cdn.tailwindcss.com / unpkg.com: dùng cho admin templates Jinja.
-    # - static.cloudflareinsights.com + cloudflareinsights.com: Cloudflare tunnel/CDN
-    #   tự động inject `beacon.min.js` cho Web Analytics; không thêm sẽ bị block khi
-    #   chạy sau trycloudflare/ngrok/cloudflare proxy.
-    # - img-src cho phép cùng origin (qr/pay PNG) + img.vietqr.io (legacy admin).
+    # - SPA React đã build → KHÔNG cần `unsafe-inline` script.
+    # - cdn.tailwindcss.com / unpkg.com: legacy admin Jinja templates dùng nonce.
+    #   Khi không gen nonce thì admin templates sẽ không chạy script inline —
+    #   chấp nhận tradeoff cho SPA strict; admin Jinja đang phase-out.
+    # - static.cloudflareinsights.com + cloudflareinsights.com: Cloudflare beacon.
     DEFAULT_CSP = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com "
-        "https://unpkg.com https://static.cloudflareinsights.com; "
-        "script-src-elem 'self' 'unsafe-inline' https://cdn.tailwindcss.com "
-        "https://unpkg.com https://static.cloudflareinsights.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
-        "https://cdn.tailwindcss.com; "
+        "script-src 'self' https://challenges.cloudflare.com https://js.hcaptcha.com "
+        "https://static.cloudflareinsights.com; "
+        "script-src-elem 'self' https://challenges.cloudflare.com "
+        "https://js.hcaptcha.com https://static.cloudflareinsights.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com data:; "
         "img-src 'self' data: blob: https://img.vietqr.io; "
-        "connect-src 'self' https://cloudflareinsights.com; "
+        "connect-src 'self' https://cloudflareinsights.com "
+        "https://challenges.cloudflare.com https://hcaptcha.com; "
+        "frame-src https://challenges.cloudflare.com https://hcaptcha.com "
+        "https://*.hcaptcha.com; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -66,7 +71,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id = request.headers.get(self._request_id_header) or _new_request_id()
         request.state.request_id = request_id
-        response = await call_next(request)
+        rid_token = request_id_var.set(request_id)
+        # Best-effort lấy user_id từ session middleware đã chạy trước đó
+        sess_user = None
+        try:
+            sess_user = request.session.get("user_id") if hasattr(request, "session") else None
+        except Exception:  # noqa: BLE001
+            sess_user = None
+        uid_token = user_id_var.set(sess_user)
+        sentry_sdk.set_tag("request_id", request_id)
+        if sess_user:
+            sentry_sdk.set_user({"id": sess_user})
+        try:
+            response = await call_next(request)
+        finally:
+            request_id_var.reset(rid_token)
+            user_id_var.reset(uid_token)
+            # route được set lại ở http_metrics middleware sau khi route match;
+            # context var không cần cleanup vì sẽ được middleware reset mỗi req.
+            route_var.set(None)
         response.headers.setdefault(self._request_id_header, request_id)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")

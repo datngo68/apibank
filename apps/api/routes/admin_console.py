@@ -18,13 +18,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.billing import wallet
 from packages.config import runtime as config_runtime
+from packages.config.settings import get_settings
 from packages.db.models import (
     ApiKey,
+    ApiUsageDaily,
     AuditLog,
     BankAccount,
     Coupon,
     CouponRedemption,
     EmailToken,
+    Invoice,
     Order,
     Plan,
     Subscription,
@@ -41,6 +44,10 @@ from packages.db.session import get_session
 from packages.notifications import email as email_pkg
 from packages.notifications import telegram as tg
 from packages.schemas.admin import (
+    AdminApiKeyCreate,
+    AdminApiKeyCreated,
+    AdminApiKeyListResponse,
+    AdminApiKeyRead,
     AdminAuditItem,
     AdminAuditResponse,
     AdminBankAccountRead,
@@ -48,15 +55,29 @@ from packages.schemas.admin import (
     AdminCouponRead,
     AdminCouponRedemptionRead,
     AdminCouponUpdate,
+    AdminInvoiceListResponse,
+    AdminInvoiceRead,
     AdminPlanCreate,
     AdminPlanRead,
     AdminPlanUpdate,
+    AdminRevenueByCouponRow,
+    AdminRevenueByPlanRow,
+    AdminRevenuePoint,
+    AdminRevenueSummary,
+    AdminRevenueTimeseries,
     AdminStats,
     AdminSystemBankSet,
+    AdminUsageApiKeyBreakdown,
+    AdminUsageDailyPoint,
+    AdminUsageEndpointRow,
+    AdminUsageSummary,
+    AdminUsageTimeseries,
+    AdminUsageUserRow,
     AdminUserDetail,
     AdminUserListItem,
     AdminUserListResponse,
     AdminUserUpdate,
+    AdminUserUsageDetail,
     GoogleConfigRead,
     GoogleConfigUpdate,
     SmtpConfigRead,
@@ -73,6 +94,7 @@ from packages.schemas.admin import (
 )
 from packages.schemas.auth import GenericMessage
 from packages.security import oauth_google
+from packages.security.api_keys import generate_api_key, hash_api_key
 from packages.security.audit import record_audit
 from packages.security.email_tokens import KIND_RESET, issue_email_token
 from packages.security.tokens import generate_token, hash_token
@@ -159,6 +181,40 @@ async def get_user_detail(
         or 0
     )
 
+    api_keys_count = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(ApiKey)
+                .where(ApiKey.user_id == user.id)
+                .where(ApiKey.revoked_at.is_(None))
+            )
+        ).scalar_one()
+        or 0
+    )
+    recent_keys_rows = list(
+        (
+            await session.scalars(
+                select(ApiKey)
+                .where(ApiKey.user_id == user.id)
+                .order_by(desc(ApiKey.created_at))
+                .limit(5)
+            )
+        ).all()
+    )
+    recent_api_keys = [
+        {
+            "id": r.id,
+            "name": r.name,
+            "scopes": list(r.scopes or []),
+            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "revoked_at": r.revoked_at.isoformat() if r.revoked_at else None,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in recent_keys_rows
+    ]
+
     sub_row = (
         await session.scalars(
             select(Subscription)
@@ -215,8 +271,10 @@ async def get_user_detail(
         created_at=user.created_at,
         bank_accounts_count=bank_count,
         sessions_count=sess_count,
+        api_keys_count=api_keys_count,
         subscription=sub_payload,
         recent_wallet_tx=recent_tx,
+        recent_api_keys=recent_api_keys,
     )
 
 
@@ -239,6 +297,8 @@ async def update_user(
         user.status = payload.status
     if payload.full_name is not None:
         user.full_name = payload.full_name.strip() or None
+    if payload.admin_role_extra is not None:
+        user.admin_role_extra = payload.admin_role_extra
 
     await record_audit(
         session,
@@ -248,7 +308,12 @@ async def update_user(
         target_id=user.id,
         ip=request.client.host if request.client else None,
         before=before,
-        after={"role": user.role, "status": user.status, "full_name": user.full_name},
+        after={
+            "role": user.role,
+            "status": user.status,
+            "full_name": user.full_name,
+            "admin_role_extra": user.admin_role_extra,
+        },
     )
     await session.commit()
     return AdminUserListItem.model_validate(user, from_attributes=True)
@@ -544,6 +609,73 @@ async def admin_delete_plan(
     return GenericMessage(message="deactivated")
 
 
+@router.post("/plans/{plan_id}:clone", response_model=AdminPlanRead)
+async def admin_clone_plan(
+    plan_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+    new_code: str = Query(..., min_length=1, max_length=32, pattern="^[a-z0-9-]+$"),
+) -> AdminPlanRead:
+    src = await session.get(Plan, plan_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="plan not found")
+    existing = (
+        await session.scalars(select(Plan).where(Plan.code == new_code))
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="code already exists")
+    clone = Plan(
+        code=new_code,
+        name=f"{src.name} (copy)",
+        description=src.description,
+        price_vnd=src.price_vnd,
+        duration_days=src.duration_days,
+        daily_quota=src.daily_quota,
+        monthly_quota=src.monthly_quota,
+        features_json=dict(src.features_json or {}),
+        sort_order=src.sort_order,
+        active=False,  # an toàn: clone tắt mặc định
+    )
+    session.add(clone)
+    await session.flush()
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.plan.clone",
+        target_type="plan",
+        target_id=clone.id,
+        ip=request.client.host if request.client else None,
+        after={"source": plan_id, "new_code": new_code},
+    )
+    await session.commit()
+    return AdminPlanRead.model_validate(clone, from_attributes=True)
+
+
+@router.post("/plans/{plan_id}:archive", response_model=GenericMessage)
+async def admin_archive_plan(
+    plan_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    plan = await session.get(Plan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="not found")
+    plan.archived_at = datetime.now(UTC)
+    plan.active = False
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.plan.archive",
+        target_type="plan",
+        target_id=plan.id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return GenericMessage(message="archived")
+
+
 # ---------------------------------------------------------------------------
 # COUPONS
 # ---------------------------------------------------------------------------
@@ -728,6 +860,160 @@ async def admin_list_coupon_redemptions(
     ]
 
 
+@router.get("/coupons/{coupon_id}/by-user")
+async def admin_coupon_redemptions_by_user(
+    coupon_id: str,
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """Aggregate redemption coupon theo user (count + total discount)."""
+    coupon = await session.get(Coupon, coupon_id)
+    if coupon is None:
+        raise HTTPException(status_code=404, detail="coupon not found")
+    rows = (
+        await session.execute(
+            select(
+                CouponRedemption.user_id,
+                User.email,
+                func.count(CouponRedemption.id),
+                func.coalesce(func.sum(CouponRedemption.discount_vnd), 0),
+            )
+            .outerjoin(User, User.id == CouponRedemption.user_id)
+            .where(CouponRedemption.coupon_id == coupon_id)
+            .group_by(CouponRedemption.user_id, User.email)
+            .order_by(desc(func.sum(CouponRedemption.discount_vnd)))
+        )
+    ).all()
+    return [
+        {
+            "user_id": r[0],
+            "user_email": r[1],
+            "redemptions": int(r[2] or 0),
+            "discount_vnd": str(r[3] or 0),
+        }
+        for r in rows
+    ]
+
+
+@router.post("/coupons/{coupon_id}:clone", response_model=AdminCouponRead)
+async def admin_clone_coupon(
+    coupon_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+    new_code: str = Query(..., min_length=2, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
+) -> AdminCouponRead:
+    src = await session.get(Coupon, coupon_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="coupon not found")
+    new_code_upper = new_code.upper()
+    existing = (
+        await session.scalars(select(Coupon).where(Coupon.code == new_code_upper))
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="code already exists")
+    clone = Coupon(
+        code=new_code_upper,
+        description=src.description,
+        discount_type=src.discount_type,
+        percent_off=src.percent_off,
+        amount_off_vnd=src.amount_off_vnd,
+        max_discount_vnd=src.max_discount_vnd,
+        min_amount_vnd=src.min_amount_vnd,
+        max_redemptions=src.max_redemptions,
+        max_per_user=src.max_per_user,
+        valid_from=src.valid_from,
+        valid_until=src.valid_until,
+        plan_codes_json=list(src.plan_codes_json or []),
+        active=False,
+        created_by=actor.id,
+    )
+    session.add(clone)
+    await session.flush()
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.coupon.clone",
+        target_type="coupon",
+        target_id=clone.id,
+        ip=request.client.host if request.client else None,
+        after={"source": coupon_id, "new_code": new_code_upper},
+    )
+    await session.commit()
+    return _coupon_to_read(clone)
+
+
+@router.post("/coupons/import")
+async def admin_import_coupons(
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+    items: list[AdminCouponCreate] | None = None,
+) -> dict[str, Any]:
+    """Bulk create coupon từ payload JSON.
+
+    Body là list ``AdminCouponCreate``. Skip những coupon trùng code.
+    """
+    if not items:
+        return {"created": 0, "skipped": 0, "errors": []}
+    created = 0
+    skipped = 0
+    errors: list[dict[str, Any]] = []
+    for payload in items:
+        code = payload.code.strip().upper()
+        existing = (
+            await session.scalars(select(Coupon).where(Coupon.code == code))
+        ).first()
+        if existing is not None:
+            skipped += 1
+            continue
+        try:
+            coupon = Coupon(
+                code=code,
+                description=payload.description,
+                discount_type=payload.discount_type,
+                percent_off=payload.percent_off,
+                amount_off_vnd=(
+                    Decimal(payload.amount_off_vnd)
+                    if payload.amount_off_vnd is not None
+                    else None
+                ),
+                max_discount_vnd=(
+                    Decimal(payload.max_discount_vnd)
+                    if payload.max_discount_vnd is not None
+                    else None
+                ),
+                min_amount_vnd=(
+                    Decimal(payload.min_amount_vnd)
+                    if payload.min_amount_vnd is not None
+                    else None
+                ),
+                max_redemptions=payload.max_redemptions,
+                max_per_user=payload.max_per_user,
+                valid_from=payload.valid_from,
+                valid_until=payload.valid_until,
+                plan_codes_json=list(payload.plan_codes),
+                active=payload.active,
+                created_by=actor.id,
+            )
+            session.add(coupon)
+            created += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"code": code, "error": str(exc)})
+
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.coupon.import",
+        target_type="coupon",
+        target_id="*",
+        ip=request.client.host if request.client else None,
+        after={"created": created, "skipped": skipped, "errors": len(errors)},
+    )
+    await session.commit()
+    return {"created": created, "skipped": skipped, "errors": errors}
+
+
 # ---------------------------------------------------------------------------
 # BANK ACCOUNTS / SYSTEM BANK
 # ---------------------------------------------------------------------------
@@ -860,6 +1146,156 @@ async def admin_unset_system_bank(
 
 
 # ---------------------------------------------------------------------------
+# BANK ACCOUNT OPS (re-poll, toggle, rotate creds, reset cursor, soft-delete)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/bank-accounts/{bank_id}:poll", response_model=GenericMessage)
+async def admin_force_poll(
+    bank_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    """Force trigger 1 chu kỳ poll ngay (qua poll_kick)."""
+    from packages.banks import poll_kick
+
+    bank = await session.get(BankAccount, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="bank account not found")
+    # Local kick (nếu worker cùng process); Redis kick cho cluster.
+    poll_kick.set_local(bank_id)
+    try:
+        await poll_kick.kick(bank_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("admin_force_poll_kick_failed", extra={"bank_id": bank_id})
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.bank.force_poll",
+        target_type="bank_account",
+        target_id=bank_id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return GenericMessage(message="kicked")
+
+
+@router.patch("/bank-accounts/{bank_id}", response_model=GenericMessage)
+async def admin_update_bank_account(
+    bank_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+    polling_enabled: bool | None = None,
+) -> GenericMessage:
+    bank = await session.get(BankAccount, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="bank account not found")
+    before = {"polling_enabled": bank.polling_enabled}
+    if polling_enabled is not None:
+        bank.polling_enabled = polling_enabled
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.bank.update",
+        target_type="bank_account",
+        target_id=bank_id,
+        ip=request.client.host if request.client else None,
+        before=before,
+        after={"polling_enabled": bank.polling_enabled},
+    )
+    await session.commit()
+    return GenericMessage(message="ok")
+
+
+@router.post("/bank-accounts/{bank_id}/rotate-credentials", response_model=GenericMessage)
+async def admin_rotate_bank_credentials(
+    bank_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+    username: str = Query(..., min_length=1, max_length=255),
+    password: str = Query(..., min_length=1, max_length=255),
+) -> GenericMessage:
+    """Cập nhật credentials (encrypt qua Fernet) và clear last_error."""
+    from packages.security.crypto import FernetCipher
+
+    bank = await session.get(BankAccount, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="bank account not found")
+    settings = get_settings()
+    if not settings.fernet_keys:
+        raise HTTPException(status_code=500, detail="fernet keys not configured")
+    cipher = FernetCipher.from_keys(settings.fernet_keys)
+    bank.credentials_enc = cipher.encrypt(f"{username}\n{password}")
+    bank.last_error = None
+    bank.polling_status = "idle"
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.bank.rotate_credentials",
+        target_type="bank_account",
+        target_id=bank_id,
+        ip=request.client.host if request.client else None,
+        after={"username_set": True},
+    )
+    await session.commit()
+    return GenericMessage(message="rotated")
+
+
+@router.post("/bank-accounts/{bank_id}/reset-cursor", response_model=GenericMessage)
+async def admin_reset_poll_cursor(
+    bank_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    from packages.db.models import PollCursor
+
+    bank = await session.get(BankAccount, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="bank account not found")
+    cursor = await session.get(PollCursor, bank_id)
+    if cursor is not None:
+        await session.delete(cursor)
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.bank.reset_cursor",
+        target_type="bank_account",
+        target_id=bank_id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return GenericMessage(message="reset")
+
+
+@router.delete("/bank-accounts/{bank_id}", response_model=GenericMessage)
+async def admin_soft_delete_bank(
+    bank_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    bank = await session.get(BankAccount, bank_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="bank account not found")
+    bank.status = "deleted"
+    bank.polling_enabled = False
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.bank.delete",
+        target_type="bank_account",
+        target_id=bank_id,
+        ip=request.client.host if request.client else None,
+    )
+    await session.commit()
+    return GenericMessage(message="deleted")
+
+
+# ---------------------------------------------------------------------------
 # STATS + AUDIT LOG
 # ---------------------------------------------------------------------------
 
@@ -930,6 +1366,51 @@ async def admin_stats(
         ).scalar_one() or 0
     )
 
+    last_30d = now - timedelta(days=30)
+    revenue_30d = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.amount_vnd), 0))
+                .where(Invoice.status == "paid")
+                .where(Invoice.issued_at >= last_30d)
+            )
+        ).scalar_one() or 0
+    )
+    # MRR = sum(price_vnd / duration_days * 30) cho subscription active còn hiệu lực
+    mrr_rows = (
+        await session.execute(
+            select(Plan.price_vnd, Plan.duration_days)
+            .select_from(Subscription)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(Subscription.status == "active")
+            .where(Subscription.expires_at > now)
+        )
+    ).all()
+    mrr = Decimal(0)
+    for price, days in mrr_rows:
+        if days and int(days) > 0:
+            mrr += Decimal(price) * Decimal(30) / Decimal(int(days))
+    mrr = mrr.quantize(Decimal("1"))
+
+    api_keys_active = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(ApiKey)
+                .where(ApiKey.revoked_at.is_(None))
+            )
+        ).scalar_one() or 0
+    )
+    today = now.date()
+    requests_24h = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(ApiUsageDaily.count), 0))
+                .where(ApiUsageDaily.day == today)
+            )
+        ).scalar_one() or 0
+    )
+
     return AdminStats(
         users_total=users_total,
         users_active=users_active,
@@ -939,6 +1420,10 @@ async def admin_stats(
         wallet_total_vnd=Decimal(wallet_total),
         subscriptions_active=subs_active,
         bank_accounts=bank_accounts,
+        revenue_30d_vnd=revenue_30d,
+        mrr_vnd=mrr,
+        api_keys_active=api_keys_active,
+        requests_24h=requests_24h,
     )
 
 
@@ -946,8 +1431,15 @@ async def admin_stats(
 async def admin_audit_log(
     action: str | None = None,
     actor: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    ip: str | None = None,
+    q: str | None = None,
+    date_from: datetime | None = Query(default=None, alias="from"),
+    date_to: datetime | None = Query(default=None, alias="to"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(default=None, description="audit_log.id để keyset paginate"),
     _: User = Depends(current_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> AdminAuditResponse:
@@ -960,7 +1452,34 @@ async def admin_audit_log(
     if actor:
         stmt = stmt.where(AuditLog.actor == actor)
         count_stmt = count_stmt.where(AuditLog.actor == actor)
+    if target_type:
+        stmt = stmt.where(AuditLog.target_type == target_type)
+        count_stmt = count_stmt.where(AuditLog.target_type == target_type)
+    if target_id:
+        stmt = stmt.where(AuditLog.target_id == target_id)
+        count_stmt = count_stmt.where(AuditLog.target_id == target_id)
+    if ip:
+        stmt = stmt.where(AuditLog.ip == ip)
+        count_stmt = count_stmt.where(AuditLog.ip == ip)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(AuditLog.action.ilike(like))
+        count_stmt = count_stmt.where(AuditLog.action.ilike(like))
+    if date_from:
+        stmt = stmt.where(AuditLog.created_at >= date_from)
+        count_stmt = count_stmt.where(AuditLog.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(AuditLog.created_at <= date_to)
+        count_stmt = count_stmt.where(AuditLog.created_at <= date_to)
+
     total = int((await session.execute(count_stmt)).scalar_one() or 0)
+    if cursor:
+        # Keyset pagination: chỉ trả các row có id < cursor (theo created_at desc).
+        # Cursor là id của row cuối page trước.
+        anchor = await session.get(AuditLog, cursor)
+        if anchor is not None:
+            stmt = stmt.where(AuditLog.created_at < anchor.created_at)
+        offset = 0
     rows = list(
         (
             await session.scalars(
@@ -1341,6 +1860,716 @@ async def unlink_telegram_chat(
     )
     await session.commit()
     return GenericMessage(message="ok")
+
+
+# ---------------------------------------------------------------------------
+# API KEYS (admin)
+# ---------------------------------------------------------------------------
+
+
+_ADMIN_ALLOWED_SCOPES = {
+    "orders:read",
+    "orders:write",
+    "transactions:read",
+    "webhooks:read",
+    "bank_accounts:read",
+    "admin:*",
+}
+
+
+def _api_key_to_read(record: ApiKey, *, user_email: str | None) -> AdminApiKeyRead:
+    return AdminApiKeyRead(
+        id=record.id,
+        user_id=record.user_id,
+        user_email=user_email,
+        name=record.name,
+        scopes=list(record.scopes or []),
+        last_used_at=record.last_used_at,
+        last_used_ip=record.last_used_ip,
+        expires_at=record.expires_at,
+        revoked_at=record.revoked_at,
+        created_at=record.created_at,
+    )
+
+
+@router.get("/api-keys", response_model=AdminApiKeyListResponse)
+async def admin_list_api_keys(
+    user_id: str | None = None,
+    q: str | None = None,
+    revoked: bool | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminApiKeyListResponse:
+    stmt = select(ApiKey, User.email).outerjoin(User, ApiKey.user_id == User.id)
+    count_stmt = select(func.count()).select_from(ApiKey).outerjoin(
+        User, ApiKey.user_id == User.id
+    )
+    if user_id:
+        stmt = stmt.where(ApiKey.user_id == user_id)
+        count_stmt = count_stmt.where(ApiKey.user_id == user_id)
+    if revoked is True:
+        stmt = stmt.where(ApiKey.revoked_at.is_not(None))
+        count_stmt = count_stmt.where(ApiKey.revoked_at.is_not(None))
+    elif revoked is False:
+        stmt = stmt.where(ApiKey.revoked_at.is_(None))
+        count_stmt = count_stmt.where(ApiKey.revoked_at.is_(None))
+    if q:
+        like = f"%{q.lower()}%"
+        stmt = stmt.where(or_(User.email.ilike(like), ApiKey.name.ilike(like)))
+        count_stmt = count_stmt.where(
+            or_(User.email.ilike(like), ApiKey.name.ilike(like))
+        )
+
+    total = int((await session.execute(count_stmt)).scalar_one() or 0)
+    stmt = stmt.order_by(desc(ApiKey.created_at)).limit(limit).offset(offset)
+    rows = (await session.execute(stmt)).all()
+    items = [_api_key_to_read(r, user_email=email) for r, email in rows]
+    return AdminApiKeyListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get(
+    "/users/{user_id}/api-keys", response_model=list[AdminApiKeyRead]
+)
+async def admin_list_user_api_keys(
+    user_id: str,
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminApiKeyRead]:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    rows = list(
+        (
+            await session.scalars(
+                select(ApiKey)
+                .where(ApiKey.user_id == user_id)
+                .order_by(desc(ApiKey.created_at))
+            )
+        ).all()
+    )
+    return [_api_key_to_read(r, user_email=user.email) for r in rows]
+
+
+@router.post(
+    "/users/{user_id}/api-keys",
+    response_model=AdminApiKeyCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_create_user_api_key(
+    user_id: str,
+    payload: AdminApiKeyCreate,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminApiKeyCreated:
+    target = await session.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    invalid = [s for s in payload.scopes if s not in _ADMIN_ALLOWED_SCOPES]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid scopes: {invalid}",
+        )
+    raw = generate_api_key()
+    digest = hash_api_key(raw, salt=get_settings().api_key_salt)
+    record = ApiKey(
+        owner_id=target.id,
+        user_id=target.id,
+        name=payload.name,
+        key_hash=digest,
+        scopes=list(payload.scopes),
+        expires_at=payload.expires_at,
+    )
+    session.add(record)
+    await session.flush()
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.apikey.create",
+        target_type="api_key",
+        target_id=record.id,
+        ip=request.client.host if request.client else None,
+        after={"user_id": target.id, "name": payload.name, "scopes": payload.scopes},
+    )
+    await session.commit()
+    base = _api_key_to_read(record, user_email=target.email).model_dump()
+    return AdminApiKeyCreated(**base, raw_key=raw)
+
+
+@router.post("/api-keys/{api_key_id}/revoke", response_model=GenericMessage)
+async def admin_revoke_api_key(
+    api_key_id: str,
+    request: Request,
+    actor: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> GenericMessage:
+    record = await session.get(ApiKey, api_key_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="api key not found")
+    if record.revoked_at is None:
+        record.revoked_at = datetime.now(UTC)
+    await record_audit(
+        session,
+        actor=actor.id,
+        action="admin.apikey.revoke",
+        target_type="api_key",
+        target_id=record.id,
+        ip=request.client.host if request.client else None,
+        after={"user_id": record.user_id},
+    )
+    await session.commit()
+    return GenericMessage(message="revoked")
+
+
+# ---------------------------------------------------------------------------
+# USAGE ANALYTICS
+# ---------------------------------------------------------------------------
+
+
+def _normalize_days(days: int) -> int:
+    if days < 1:
+        return 1
+    if days > 365:
+        return 365
+    return days
+
+
+@router.get("/usage/summary", response_model=AdminUsageSummary)
+async def admin_usage_summary(
+    days: int = Query(7, ge=1, le=365),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminUsageSummary:
+    days = _normalize_days(days)
+    today = datetime.now(UTC).date()
+    since = today - timedelta(days=days - 1)
+
+    totals_row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(ApiUsageDaily.count), 0),
+                func.coalesce(func.sum(ApiUsageDaily.error_count), 0),
+                func.count(func.distinct(ApiUsageDaily.user_id)),
+                func.count(func.distinct(ApiUsageDaily.api_key_id)),
+            ).where(ApiUsageDaily.day >= since)
+        )
+    ).first()
+    total_count = int(totals_row[0] or 0) if totals_row else 0
+    total_errors = int(totals_row[1] or 0) if totals_row else 0
+    unique_users = int(totals_row[2] or 0) if totals_row else 0
+    unique_keys = int(totals_row[3] or 0) if totals_row else 0
+
+    top_endpoints_rows = (
+        await session.execute(
+            select(
+                ApiUsageDaily.endpoint_group,
+                func.sum(ApiUsageDaily.count).label("c"),
+                func.sum(ApiUsageDaily.error_count).label("e"),
+            )
+            .where(ApiUsageDaily.day >= since)
+            .group_by(ApiUsageDaily.endpoint_group)
+            .order_by(desc("c"))
+            .limit(5)
+        )
+    ).all()
+    top_endpoints = [
+        AdminUsageEndpointRow(
+            endpoint_group=r[0], count=int(r[1] or 0), error_count=int(r[2] or 0)
+        )
+        for r in top_endpoints_rows
+    ]
+
+    top_users_rows = (
+        await session.execute(
+            select(
+                ApiUsageDaily.user_id,
+                User.email,
+                func.sum(ApiUsageDaily.count).label("c"),
+                func.sum(ApiUsageDaily.error_count).label("e"),
+            )
+            .select_from(ApiUsageDaily)
+            .outerjoin(User, User.id == ApiUsageDaily.user_id)
+            .where(ApiUsageDaily.day >= since)
+            .group_by(ApiUsageDaily.user_id, User.email)
+            .order_by(desc("c"))
+            .limit(5)
+        )
+    ).all()
+    top_users = [
+        AdminUsageUserRow(
+            user_id=r[0],
+            user_email=r[1],
+            count=int(r[2] or 0),
+            error_count=int(r[3] or 0),
+        )
+        for r in top_users_rows
+    ]
+
+    return AdminUsageSummary(
+        days=days,
+        total_count=total_count,
+        total_errors=total_errors,
+        unique_users=unique_users,
+        unique_api_keys=unique_keys,
+        top_endpoints=top_endpoints,
+        top_users=top_users,
+    )
+
+
+def _build_daily_series(
+    rows: list[tuple[Any, int, int]], *, days: int, since: Any
+) -> list[AdminUsageDailyPoint]:
+    bucket: dict[str, tuple[int, int]] = {}
+    for day_val, cnt, err in rows:
+        key = day_val.isoformat() if hasattr(day_val, "isoformat") else str(day_val)
+        bucket[key] = (int(cnt or 0), int(err or 0))
+    points: list[AdminUsageDailyPoint] = []
+    for i in range(days):
+        d = since + timedelta(days=i)
+        key = d.isoformat()
+        cnt, err = bucket.get(key, (0, 0))
+        points.append(AdminUsageDailyPoint(day=key, count=cnt, error_count=err))
+    return points
+
+
+@router.get("/usage/timeseries", response_model=AdminUsageTimeseries)
+async def admin_usage_timeseries(
+    days: int = Query(30, ge=1, le=365),
+    user_id: str | None = None,
+    api_key_id: str | None = None,
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminUsageTimeseries:
+    days = _normalize_days(days)
+    today = datetime.now(UTC).date()
+    since = today - timedelta(days=days - 1)
+    stmt = (
+        select(
+            ApiUsageDaily.day,
+            func.sum(ApiUsageDaily.count),
+            func.sum(ApiUsageDaily.error_count),
+        )
+        .where(ApiUsageDaily.day >= since)
+        .group_by(ApiUsageDaily.day)
+        .order_by(ApiUsageDaily.day)
+    )
+    if user_id:
+        stmt = stmt.where(ApiUsageDaily.user_id == user_id)
+    if api_key_id:
+        stmt = stmt.where(ApiUsageDaily.api_key_id == api_key_id)
+    rows = (await session.execute(stmt)).all()
+    points = _build_daily_series(
+        [(r[0], r[1], r[2]) for r in rows], days=days, since=since
+    )
+    return AdminUsageTimeseries(
+        days=days, user_id=user_id, api_key_id=api_key_id, points=points
+    )
+
+
+@router.get("/users/{user_id}/usage", response_model=AdminUserUsageDetail)
+async def admin_user_usage(
+    user_id: str,
+    days: int = Query(30, ge=1, le=365),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminUserUsageDetail:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    days = _normalize_days(days)
+    today = datetime.now(UTC).date()
+    since = today - timedelta(days=days - 1)
+
+    daily_rows = (
+        await session.execute(
+            select(
+                ApiUsageDaily.day,
+                func.sum(ApiUsageDaily.count),
+                func.sum(ApiUsageDaily.error_count),
+            )
+            .where(ApiUsageDaily.user_id == user_id)
+            .where(ApiUsageDaily.day >= since)
+            .group_by(ApiUsageDaily.day)
+            .order_by(ApiUsageDaily.day)
+        )
+    ).all()
+    points = _build_daily_series(
+        [(r[0], r[1], r[2]) for r in daily_rows], days=days, since=since
+    )
+
+    by_key_rows = (
+        await session.execute(
+            select(
+                ApiUsageDaily.api_key_id,
+                ApiKey.name,
+                func.sum(ApiUsageDaily.count),
+                func.sum(ApiUsageDaily.error_count),
+            )
+            .select_from(ApiUsageDaily)
+            .outerjoin(ApiKey, ApiKey.id == ApiUsageDaily.api_key_id)
+            .where(ApiUsageDaily.user_id == user_id)
+            .where(ApiUsageDaily.day >= since)
+            .group_by(ApiUsageDaily.api_key_id, ApiKey.name)
+            .order_by(desc(func.sum(ApiUsageDaily.count)))
+        )
+    ).all()
+    by_api_key = [
+        AdminUsageApiKeyBreakdown(
+            api_key_id=r[0], name=r[1], count=int(r[2] or 0), error_count=int(r[3] or 0)
+        )
+        for r in by_key_rows
+    ]
+
+    by_endpoint_rows = (
+        await session.execute(
+            select(
+                ApiUsageDaily.endpoint_group,
+                func.sum(ApiUsageDaily.count),
+                func.sum(ApiUsageDaily.error_count),
+            )
+            .where(ApiUsageDaily.user_id == user_id)
+            .where(ApiUsageDaily.day >= since)
+            .group_by(ApiUsageDaily.endpoint_group)
+            .order_by(desc(func.sum(ApiUsageDaily.count)))
+        )
+    ).all()
+    by_endpoint = [
+        AdminUsageEndpointRow(
+            endpoint_group=r[0], count=int(r[1] or 0), error_count=int(r[2] or 0)
+        )
+        for r in by_endpoint_rows
+    ]
+
+    total_count = sum(p.count for p in points)
+    total_errors = sum(p.error_count for p in points)
+    return AdminUserUsageDetail(
+        user_id=user_id,
+        days=days,
+        total_count=total_count,
+        total_errors=total_errors,
+        points=points,
+        by_api_key=by_api_key,
+        by_endpoint=by_endpoint,
+    )
+
+
+# ---------------------------------------------------------------------------
+# REVENUE
+# ---------------------------------------------------------------------------
+
+
+@router.get("/revenue/summary", response_model=AdminRevenueSummary)
+async def admin_revenue_summary(
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminRevenueSummary:
+    now = datetime.now(UTC)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=UTC)
+    month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    last_30d = now - timedelta(days=30)
+
+    today_vnd = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.amount_vnd), 0))
+                .where(Invoice.status == "paid")
+                .where(Invoice.issued_at >= today_start)
+            )
+        ).scalar_one() or 0
+    )
+    this_month_vnd = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.amount_vnd), 0))
+                .where(Invoice.status == "paid")
+                .where(Invoice.issued_at >= month_start)
+            )
+        ).scalar_one() or 0
+    )
+    last_30d_vnd = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.amount_vnd), 0))
+                .where(Invoice.status == "paid")
+                .where(Invoice.issued_at >= last_30d)
+            )
+        ).scalar_one() or 0
+    )
+    total_invoices = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Invoice)
+                .where(Invoice.status == "paid")
+            )
+        ).scalar_one() or 0
+    )
+    topup_30d = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(WalletTransaction.amount_vnd), 0))
+                .where(WalletTransaction.type == "topup")
+                .where(WalletTransaction.created_at >= last_30d)
+            )
+        ).scalar_one() or 0
+    )
+    refund_30d_raw = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(WalletTransaction.amount_vnd), 0))
+                .where(WalletTransaction.type == "refund")
+                .where(WalletTransaction.created_at >= last_30d)
+            )
+        ).scalar_one() or 0
+    )
+    refund_30d = abs(refund_30d_raw)
+    discount_30d = Decimal(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(Invoice.discount_vnd), 0))
+                .where(Invoice.status == "paid")
+                .where(Invoice.issued_at >= last_30d)
+            )
+        ).scalar_one() or 0
+    )
+
+    mrr_rows = (
+        await session.execute(
+            select(Plan.price_vnd, Plan.duration_days)
+            .select_from(Subscription)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(Subscription.status == "active")
+            .where(Subscription.expires_at > now)
+        )
+    ).all()
+    mrr = Decimal(0)
+    for price, days_ in mrr_rows:
+        if days_ and int(days_) > 0:
+            mrr += Decimal(price) * Decimal(30) / Decimal(int(days_))
+    mrr = mrr.quantize(Decimal("1"))
+
+    return AdminRevenueSummary(
+        today_vnd=today_vnd,
+        this_month_vnd=this_month_vnd,
+        last_30d_vnd=last_30d_vnd,
+        mrr_vnd=mrr,
+        total_invoices_paid=total_invoices,
+        topup_vnd_30d=topup_30d,
+        refund_vnd_30d=refund_30d,
+        discount_vnd_30d=discount_30d,
+    )
+
+
+@router.get("/revenue/timeseries", response_model=AdminRevenueTimeseries)
+async def admin_revenue_timeseries(
+    days: int = Query(30, ge=1, le=365),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminRevenueTimeseries:
+    days = _normalize_days(days)
+    now = datetime.now(UTC)
+    today = now.date()
+    since_day = today - timedelta(days=days - 1)
+    since_dt = datetime(since_day.year, since_day.month, since_day.day, tzinfo=UTC)
+
+    inv_rows = (
+        await session.execute(
+            select(
+                func.date(Invoice.issued_at).label("d"),
+                func.coalesce(func.sum(Invoice.amount_vnd), 0),
+                func.coalesce(func.sum(Invoice.discount_vnd), 0),
+            )
+            .where(Invoice.status == "paid")
+            .where(Invoice.issued_at >= since_dt)
+            .group_by("d")
+        )
+    ).all()
+    topup_rows = (
+        await session.execute(
+            select(
+                func.date(WalletTransaction.created_at).label("d"),
+                func.coalesce(func.sum(WalletTransaction.amount_vnd), 0),
+            )
+            .where(WalletTransaction.type == "topup")
+            .where(WalletTransaction.created_at >= since_dt)
+            .group_by("d")
+        )
+    ).all()
+    refund_rows = (
+        await session.execute(
+            select(
+                func.date(WalletTransaction.created_at).label("d"),
+                func.coalesce(func.sum(WalletTransaction.amount_vnd), 0),
+            )
+            .where(WalletTransaction.type == "refund")
+            .where(WalletTransaction.created_at >= since_dt)
+            .group_by("d")
+        )
+    ).all()
+
+    def _to_iso_key(v: Any) -> str:
+        if hasattr(v, "isoformat"):
+            return str(v.isoformat())
+        return str(v)
+
+    inv_map = {_to_iso_key(r[0]): (Decimal(r[1] or 0), Decimal(r[2] or 0)) for r in inv_rows}
+    topup_map = {_to_iso_key(r[0]): Decimal(r[1] or 0) for r in topup_rows}
+    refund_map = {_to_iso_key(r[0]): Decimal(r[1] or 0) for r in refund_rows}
+
+    points: list[AdminRevenuePoint] = []
+    for i in range(days):
+        d = since_day + timedelta(days=i)
+        key = d.isoformat()
+        sub_amt, disc_amt = inv_map.get(key, (Decimal(0), Decimal(0)))
+        topup = topup_map.get(key, Decimal(0))
+        refund = abs(refund_map.get(key, Decimal(0)))
+        net = sub_amt + topup - refund
+        points.append(
+            AdminRevenuePoint(
+                day=key,
+                subscription_vnd=sub_amt,
+                topup_vnd=topup,
+                refund_vnd=refund,
+                discount_vnd=disc_amt,
+                net_vnd=net,
+            )
+        )
+    return AdminRevenueTimeseries(days=days, points=points)
+
+
+@router.get("/revenue/by-plan", response_model=list[AdminRevenueByPlanRow])
+async def admin_revenue_by_plan(
+    days: int = Query(30, ge=1, le=365),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminRevenueByPlanRow]:
+    days = _normalize_days(days)
+    now = datetime.now(UTC)
+    since = now - timedelta(days=days)
+    rows = (
+        await session.execute(
+            select(
+                Invoice.plan_code,
+                func.count(Invoice.id),
+                func.coalesce(func.sum(Invoice.amount_vnd), 0),
+                func.coalesce(func.sum(Invoice.discount_vnd), 0),
+            )
+            .where(Invoice.status == "paid")
+            .where(Invoice.issued_at >= since)
+            .group_by(Invoice.plan_code)
+            .order_by(desc(func.sum(Invoice.amount_vnd)))
+        )
+    ).all()
+    return [
+        AdminRevenueByPlanRow(
+            plan_code=r[0],
+            invoices=int(r[1] or 0),
+            gross_vnd=Decimal(r[2] or 0) + Decimal(r[3] or 0),
+            discount_vnd=Decimal(r[3] or 0),
+            net_vnd=Decimal(r[2] or 0),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/revenue/by-coupon", response_model=list[AdminRevenueByCouponRow])
+async def admin_revenue_by_coupon(
+    days: int = Query(30, ge=1, le=365),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminRevenueByCouponRow]:
+    days = _normalize_days(days)
+    now = datetime.now(UTC)
+    since = now - timedelta(days=days)
+    rows = (
+        await session.execute(
+            select(
+                Invoice.coupon_code,
+                func.count(Invoice.id),
+                func.coalesce(func.sum(Invoice.discount_vnd), 0),
+                func.coalesce(func.sum(Invoice.amount_vnd), 0),
+            )
+            .where(Invoice.status == "paid")
+            .where(Invoice.coupon_code.is_not(None))
+            .where(Invoice.issued_at >= since)
+            .group_by(Invoice.coupon_code)
+            .order_by(desc(func.sum(Invoice.discount_vnd)))
+        )
+    ).all()
+    return [
+        AdminRevenueByCouponRow(
+            coupon_code=r[0],
+            redemptions=int(r[1] or 0),
+            discount_vnd=Decimal(r[2] or 0),
+            net_vnd=Decimal(r[3] or 0),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/invoices", response_model=AdminInvoiceListResponse)
+async def admin_list_invoices(
+    user_id: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    plan_code: str | None = None,
+    coupon_code: str | None = None,
+    date_from: datetime | None = Query(default=None, alias="from"),
+    date_to: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _: User = Depends(current_admin_user),
+    session: AsyncSession = Depends(get_session),
+) -> AdminInvoiceListResponse:
+    stmt = select(Invoice, User.email).outerjoin(User, User.id == Invoice.user_id)
+    count_stmt = select(func.count()).select_from(Invoice)
+    if user_id:
+        stmt = stmt.where(Invoice.user_id == user_id)
+        count_stmt = count_stmt.where(Invoice.user_id == user_id)
+    if status_filter:
+        stmt = stmt.where(Invoice.status == status_filter)
+        count_stmt = count_stmt.where(Invoice.status == status_filter)
+    if plan_code:
+        stmt = stmt.where(Invoice.plan_code == plan_code)
+        count_stmt = count_stmt.where(Invoice.plan_code == plan_code)
+    if coupon_code:
+        stmt = stmt.where(Invoice.coupon_code == coupon_code)
+        count_stmt = count_stmt.where(Invoice.coupon_code == coupon_code)
+    if date_from:
+        stmt = stmt.where(Invoice.issued_at >= date_from)
+        count_stmt = count_stmt.where(Invoice.issued_at >= date_from)
+    if date_to:
+        stmt = stmt.where(Invoice.issued_at <= date_to)
+        count_stmt = count_stmt.where(Invoice.issued_at <= date_to)
+
+    total = int((await session.execute(count_stmt)).scalar_one() or 0)
+    stmt = stmt.order_by(desc(Invoice.issued_at)).limit(limit).offset(offset)
+    rows = (await session.execute(stmt)).all()
+    items = [
+        AdminInvoiceRead(
+            id=r.id,
+            user_id=r.user_id,
+            user_email=email,
+            plan_code=r.plan_code,
+            amount_vnd=Decimal(r.amount_vnd),
+            currency=r.currency,
+            status=r.status,
+            coupon_code=r.coupon_code,
+            discount_vnd=Decimal(r.discount_vnd or 0),
+            original_amount_vnd=(
+                Decimal(r.original_amount_vnd)
+                if r.original_amount_vnd is not None
+                else None
+            ),
+            issued_at=r.issued_at,
+        )
+        for r, email in rows
+    ]
+    return AdminInvoiceListResponse(
+        items=items, total=total, limit=limit, offset=offset
+    )
 
 
 __all__ = ["router"]

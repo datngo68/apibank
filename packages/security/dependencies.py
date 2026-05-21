@@ -46,10 +46,33 @@ async def authenticated_api_key(
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED, detail="api key expired"
                 )
+        # Enforce IP allowlist nếu key có set.
+        allowlist = list(getattr(api_key, "ip_allowlist_json", None) or [])
+        client_host = request.client.host if request.client else None
+        if allowlist and client_host:
+            import ipaddress
+
+            try:
+                client_ip = ipaddress.ip_address(client_host)
+            except ValueError:
+                client_ip = None
+            if client_ip is not None:
+                allowed = False
+                for cidr in allowlist:
+                    try:
+                        if client_ip in ipaddress.ip_network(cidr, strict=False):
+                            allowed = True
+                            break
+                    except ValueError:
+                        continue
+                if not allowed:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="ip not allowlisted for this api key",
+                    )
         # Best-effort cập nhật last_used_at + last_used_ip.
         try:
             api_key.last_used_at = now
-            client_host = request.client.host if request.client else None
             if client_host:
                 api_key.last_used_ip = client_host[:64]
             await session.commit()

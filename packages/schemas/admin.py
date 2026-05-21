@@ -48,14 +48,20 @@ class AdminUserDetail(BaseModel):
     created_at: datetime
     bank_accounts_count: int
     sessions_count: int
+    api_keys_count: int = 0
     subscription: dict[str, Any] | None
     recent_wallet_tx: list[dict[str, Any]]
+    recent_api_keys: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AdminUserUpdate(BaseModel):
     role: str | None = Field(default=None, pattern="^(user|admin|owner)$")
     status: str | None = Field(default=None, pattern="^(active|suspended|banned)$")
     full_name: str | None = Field(default=None, max_length=255)
+    admin_role_extra: str | None = Field(
+        default=None,
+        pattern="^(super_admin|support|finance|read_only)$",
+    )
 
 
 class WalletOpRequest(BaseModel):
@@ -242,6 +248,10 @@ class AdminStats(BaseModel):
     wallet_total_vnd: Decimal
     subscriptions_active: int
     bank_accounts: int
+    revenue_30d_vnd: Decimal = Decimal(0)
+    mrr_vnd: Decimal = Decimal(0)
+    api_keys_active: int = 0
+    requests_24h: int = 0
 
 
 class AdminAuditItem(BaseModel):
@@ -344,3 +354,160 @@ class TelegramLinkChatResponse(BaseModel):
     deep_link_url: str
     token: str
     expires_in: int
+
+
+# -- Admin API keys --------------------------------------------------------
+
+
+class AdminApiKeyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None
+    user_email: str | None = None
+    name: str | None
+    scopes: list[str]
+    last_used_at: datetime | None
+    last_used_ip: str | None
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    created_at: datetime
+
+
+class AdminApiKeyListResponse(BaseModel):
+    items: list[AdminApiKeyRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class AdminApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    scopes: list[str] = Field(default_factory=lambda: ["orders:write", "orders:read"])
+    expires_at: datetime | None = None
+
+
+class AdminApiKeyCreated(AdminApiKeyRead):
+    raw_key: str
+
+
+# -- Admin usage analytics -------------------------------------------------
+
+
+class AdminUsageEndpointRow(BaseModel):
+    endpoint_group: str
+    count: int
+    error_count: int
+
+
+class AdminUsageUserRow(BaseModel):
+    user_id: str
+    user_email: str | None = None
+    count: int
+    error_count: int
+
+
+class AdminUsageSummary(BaseModel):
+    days: int
+    total_count: int
+    total_errors: int
+    unique_users: int
+    unique_api_keys: int
+    top_endpoints: list[AdminUsageEndpointRow]
+    top_users: list[AdminUsageUserRow]
+
+
+class AdminUsageDailyPoint(BaseModel):
+    day: str  # ISO date
+    count: int
+    error_count: int
+
+
+class AdminUsageTimeseries(BaseModel):
+    days: int
+    user_id: str | None = None
+    api_key_id: str | None = None
+    points: list[AdminUsageDailyPoint]
+
+
+class AdminUsageApiKeyBreakdown(BaseModel):
+    api_key_id: str
+    name: str | None
+    count: int
+    error_count: int
+
+
+class AdminUserUsageDetail(BaseModel):
+    user_id: str
+    days: int
+    total_count: int
+    total_errors: int
+    points: list[AdminUsageDailyPoint]
+    by_api_key: list[AdminUsageApiKeyBreakdown]
+    by_endpoint: list[AdminUsageEndpointRow]
+
+
+# -- Admin revenue ---------------------------------------------------------
+
+
+class AdminRevenueSummary(BaseModel):
+    today_vnd: Decimal
+    this_month_vnd: Decimal
+    last_30d_vnd: Decimal
+    mrr_vnd: Decimal
+    total_invoices_paid: int
+    topup_vnd_30d: Decimal
+    refund_vnd_30d: Decimal
+    discount_vnd_30d: Decimal
+
+
+class AdminRevenuePoint(BaseModel):
+    day: str
+    subscription_vnd: Decimal
+    topup_vnd: Decimal
+    refund_vnd: Decimal
+    discount_vnd: Decimal
+    net_vnd: Decimal
+
+
+class AdminRevenueTimeseries(BaseModel):
+    days: int
+    points: list[AdminRevenuePoint]
+
+
+class AdminRevenueByPlanRow(BaseModel):
+    plan_code: str | None
+    invoices: int
+    gross_vnd: Decimal
+    discount_vnd: Decimal
+    net_vnd: Decimal
+
+
+class AdminRevenueByCouponRow(BaseModel):
+    coupon_code: str | None
+    redemptions: int
+    discount_vnd: Decimal
+    net_vnd: Decimal
+
+
+class AdminInvoiceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    user_email: str | None = None
+    plan_code: str | None
+    amount_vnd: Decimal
+    currency: str
+    status: str
+    coupon_code: str | None = None
+    discount_vnd: Decimal = Decimal(0)
+    original_amount_vnd: Decimal | None = None
+    issued_at: datetime
+
+
+class AdminInvoiceListResponse(BaseModel):
+    items: list[AdminInvoiceRead]
+    total: int
+    limit: int
+    offset: int

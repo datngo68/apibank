@@ -37,6 +37,9 @@ def _reset_auth_rate_limit() -> Iterator[None]:
         auth_module._auth_email_limiter = InMemoryRateLimiter(
             capacity=auth_module._AUTH_RL_CAPACITY, window_seconds=60
         )
+        auth_module._auth_ip_limiter = InMemoryRateLimiter(
+            capacity=auth_module._AUTH_IP_RL_CAPACITY, window_seconds=60
+        )
     except Exception:  # noqa: BLE001, S110
         pass
     yield

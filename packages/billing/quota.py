@@ -62,9 +62,10 @@ class QuotaTracker:
     async def hit(
         self, user_id: str, *, limit_day: int = 0, limit_month: int = 0
     ) -> QuotaStatus:
-        now = int(time.time())
-        day_bucket = now // 86_400
-        month_bucket = now // (86_400 * 30)
+        now_dt = time.gmtime()
+        # Day bucket = ngày trong năm; month bucket = year-month theo lịch (chuẩn).
+        day_bucket = f"{now_dt.tm_year}-{now_dt.tm_yday:03d}"
+        month_bucket = f"{now_dt.tm_year}-{now_dt.tm_mon:02d}"
         day_key = f"quota:{user_id}:day:{day_bucket}"
         month_key = f"quota:{user_id}:month:{month_bucket}"
 

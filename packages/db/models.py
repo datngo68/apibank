@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
+from datetime import date as _date_t
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -50,6 +53,7 @@ class BankAccount(Base):
     credentials_enc: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     is_system_account: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     last_login_at: Mapped[datetime | None]
     last_poll_at: Mapped[datetime | None]
     polling_enabled: Mapped[bool] = mapped_column(default=True)
@@ -222,6 +226,10 @@ class ApiKey(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     key_hash: Mapped[str] = mapped_column(String(128), unique=True)
     scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # IP allowlist per key (CIDR list). Empty list = không giới hạn.
+    ip_allowlist_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Mode: live | test (test mode không charge thật, chỉ dùng cho integration test).
+    mode: Mapped[str] = mapped_column(String(8), default="live")
     last_used_at: Mapped[datetime | None]
     last_used_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime | None]
@@ -287,10 +295,17 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="user", index=True)
+    # Sub-role cho admin tier (super_admin|support|finance|read_only). NULL
+    # = legacy: admin/owner mặc định 'super_admin'. Xem `packages.security.permissions`.
+    admin_role_extra: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     balance_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0), default=Decimal(0))
     locale: Mapped[str] = mapped_column(String(8), default="vi")
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Email cho hoá đơn/tax (tách khỏi login email).
+    billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_login_at: Mapped[datetime | None]
     failed_login_count: Mapped[int] = mapped_column(default=0)
     locked_until: Mapped[datetime | None]
@@ -373,6 +388,10 @@ class Plan(Base):
     features_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     sort_order: Mapped[int] = mapped_column(default=0)
     active: Mapped[bool] = mapped_column(default=True)
+    # Plan đã archive — ẩn khỏi pricing page nhưng giữ để invoice cũ vẫn ref được.
+    archived_at: Mapped[datetime | None]
+    # Khi gắn experiment_key, FE/admin có thể track conversion riêng.
+    experiment_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -526,6 +545,15 @@ class Notification(Base):
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     read_at: Mapped[datetime | None]
     sent_at: Mapped[datetime | None]
+    # Retry/DLQ fields. status='pending' (chờ gửi), 'sent' (đã set sent_at),
+    # 'dead' (vượt max_attempts). next_run_at để dispatcher chỉ pick row due.
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
+    next_run_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
 
 
@@ -542,6 +570,28 @@ class NotificationPreference(Base):
     kind: Mapped[str] = mapped_column(String(64))
     channel: Mapped[str] = mapped_column(String(16))
     enabled: Mapped[bool] = mapped_column(default=True)
+    muted_until: Mapped[datetime | None]
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class NotificationTemplate(Base):
+    """Template tái sử dụng cho admin send single / broadcast.
+
+    Field ``body_md`` nhận placeholder ``{{name}}``, ``{{email}}``, …
+    được resolve khi gửi.
+    """
+
+    __tablename__ = "notification_templates"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"nt_{secrets.token_urlsafe(12)}"
+    )
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    body_md: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
 
 
@@ -559,6 +609,220 @@ class AppConfig(Base):
     updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class ApiUsageDaily(Base):
+    """Aggregate đếm request /v1/* theo ngày × user × api_key × endpoint_group.
+
+    Middleware ``UsageMeteringMiddleware`` cộng dồn trong RAM rồi flush mỗi
+    60s qua upsert (PostgreSQL ``ON CONFLICT``, SQLite ``ON CONFLICT``).
+    Composite PK trùng natural key, đảm bảo idempotent flush.
+    """
+
+    __tablename__ = "api_usage_daily"
+    __table_args__ = (
+        Index("ix_api_usage_day_user", "day", "user_id"),
+        Index("ix_api_usage_day_apikey", "day", "api_key_id"),
+    )
+
+    day: Mapped[_date_t] = mapped_column(Date, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    api_key_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    endpoint_group: Mapped[str] = mapped_column(String(32), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class IpBlocklist(Base):
+    """Chặn IP/CIDR truy cập. Middleware kiểm trước RateLimit."""
+
+    __tablename__ = "ip_blocklist"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"blk_{secrets.token_urlsafe(12)}"
+    )
+    cidr: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class UserNote(Base):
+    """Admin ghi chú nội bộ về user."""
+
+    __tablename__ = "user_notes"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"un_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+
+
+class UserTag(Base):
+    """Tag/segment cho user (vip, fraud_watch, ...)."""
+
+    __tablename__ = "user_tags"
+    __table_args__ = (
+        UniqueConstraint("user_id", "tag", name="uq_user_tag"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"ut_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    tag: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class DataExportRequest(Base):
+    """User yêu cầu export data theo GDPR. Admin xử lý + sinh ZIP."""
+
+    __tablename__ = "data_export_requests"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"dex_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", index=True
+    )  # pending | ready | failed | expired
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    completed_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime | None]
+
+
+class LegalVersion(Base):
+    """Version của Terms / Privacy Policy đang hiệu lực.
+
+    Admin tạo version mới khi update; FE đọc version mới nhất theo `kind`.
+    """
+
+    __tablename__ = "legal_versions"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"lv_{secrets.token_urlsafe(12)}"
+    )
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # terms | privacy
+    version: Mapped[str] = mapped_column(String(32), index=True)
+    content_md: Mapped[str] = mapped_column(Text)
+    effective_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class TermsAcceptance(Base):
+    """Log mỗi lần user accept Terms/Privacy với version cụ thể."""
+
+    __tablename__ = "terms_acceptances"
+    __table_args__ = (
+        Index("ix_terms_acceptances_user_kind", "user_id", "kind"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"tac_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # terms | privacy
+    version: Mapped[str] = mapped_column(String(32))
+    accepted_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class SecurityEvent(Base):
+    """Log security event của user (login, password_change, 2fa_change,
+    email_change, ip_change, api_key_rotate, …) cho FE Settings hiển thị."""
+
+    __tablename__ = "security_events"
+    __table_args__ = (
+        Index("ix_security_events_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"sev_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+
+
+class BillingProfile(Base):
+    """Tax/billing profile của user (xuất hoá đơn doanh nghiệp)."""
+
+    __tablename__ = "billing_profiles"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), primary_key=True
+    )
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tax_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class WithdrawalRequest(Base):
+    """User yêu cầu rút tiền từ ví về bank account đã verify."""
+
+    __tablename__ = "withdrawal_requests"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"wr_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    bank_account_id: Mapped[str] = mapped_column(
+        ForeignKey("bank_accounts.id")
+    )
+    amount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", index=True
+    )  # pending | approved | rejected | paid | canceled
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    decided_at: Mapped[datetime | None]
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class SupportTicket(Base):
+    """Ticket support đơn giản — user mở, admin reply qua message."""
+
+    __tablename__ = "support_tickets"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"st_{secrets.token_urlsafe(12)}"
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    subject: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(
+        String(16), default="open", index=True
+    )  # open | replied | resolved | closed
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"tm_{secrets.token_urlsafe(12)}"
+    )
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("support_tickets.id"), index=True
+    )
+    author_id: Mapped[str] = mapped_column(String(64))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
 
 
 def _generate_order_code() -> str:

@@ -12,6 +12,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     full_name: str | None = Field(default=None, max_length=255)
+    captcha_token: str | None = Field(default=None, max_length=2048)
 
 
 class LoginRequest(BaseModel):
@@ -21,6 +22,7 @@ class LoginRequest(BaseModel):
     """code = TOTP hoặc recovery khi 2FA bật."""
     challenge_token: str | None = Field(default=None, max_length=128)
     """Token cấp ở step 1 khi 2FA bật. Bắt buộc nếu `code` được gửi kèm."""
+    captcha_token: str | None = Field(default=None, max_length=2048)
 
 
 class TwoFactorChallengeRequest(BaseModel):
@@ -30,6 +32,7 @@ class TwoFactorChallengeRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+    captcha_token: str | None = Field(default=None, max_length=2048)
 
 
 class ResetPasswordRequest(BaseModel):

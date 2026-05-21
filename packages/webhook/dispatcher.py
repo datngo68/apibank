@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -41,7 +42,10 @@ class _Outcome:
 def schedule_next(attempt: int, *, now: datetime | None = None) -> datetime:
     current = now or datetime.now(UTC)
     index = min(attempt, len(RETRY_DELAYS) - 1)
-    return current + timedelta(seconds=RETRY_DELAYS[index])
+    base = RETRY_DELAYS[index]
+    # Jitter ±25% để tránh thundering herd khi nhiều endpoint cùng down.
+    jitter = random.uniform(-0.25, 0.25) * base if base > 0 else 0  # noqa: S311
+    return current + timedelta(seconds=max(0, base + jitter))
 
 
 async def reset_stuck_dispatching(
@@ -205,10 +209,23 @@ async def dispatch_due_attempts(
 
     # Pha 1: HTTP song song. Mỗi task chỉ trả _Outcome, không touch DB.
     sem = asyncio.Semaphore(concurrency)
+    # Per-host cap để 1 endpoint chậm không chiếm hết slot global.
+    host_sems: dict[str, asyncio.Semaphore] = {}
+    HOST_CAP = 4
     metrics.webhook_dispatch_concurrency.set(0)
 
+    def _host_for(attempt: WebhookAttempt) -> str:
+        try:
+            from urllib.parse import urlparse
+
+            return urlparse(attempt.webhook.url).hostname or "unknown"
+        except Exception:  # noqa: BLE001
+            return "unknown"
+
     async def _send_attempt(attempt: WebhookAttempt) -> _Outcome:
-        async with sem:
+        host = _host_for(attempt)
+        host_sem = host_sems.setdefault(host, asyncio.Semaphore(HOST_CAP))
+        async with sem, host_sem:
             metrics.webhook_dispatch_concurrency.inc()
             try:
                 return await _post_one(attempt, client=client, now=current)

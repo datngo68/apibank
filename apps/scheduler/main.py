@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -116,6 +117,36 @@ async def expire_subscriptions_job() -> None:
         if n:
             await session.commit()
             logger.info("subscriptions_expired", extra={"count": n})
+
+
+async def audit_log_retention_job() -> None:
+    """Purge audit_log rows cũ hơn ``audit_log_retention_days`` (settings).
+
+    Disabled khi giá trị = 0. Chạy mỗi ngày 1 lần.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import delete
+
+    from packages.config.settings import get_settings
+    from packages.db.models import AuditLog
+
+    days = get_settings().audit_log_retention_days
+    if not days or days <= 0:
+        return
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            delete(AuditLog).where(AuditLog.created_at < cutoff)
+        )
+        await session.commit()
+        rows = getattr(result, "rowcount", 0) or 0
+        if rows:
+            logger.info(
+                "audit_log_purged",
+                extra={"deleted": rows, "retention_days": days},
+            )
 
 
 async def subscription_expiring_soon_job() -> None:
@@ -236,23 +267,50 @@ async def start_scheduler(stop_event: asyncio.Event | None = None) -> None:
     init_sentry(component="scheduler")
     local_stop = stop_event or asyncio.Event()
 
+    def _wrap(job_id: str, fn: Any) -> Any:
+        async def _runner() -> Any:
+            try:
+                return await fn()
+            finally:
+                metrics.scheduler_last_run_timestamp.labels(
+                    job=job_id
+                ).set_to_current_time()
+
+        _runner.__name__ = fn.__name__
+        return _runner
+
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(reconcile_job, "interval", minutes=5, id="reconcile")
+    scheduler.add_job(
+        _wrap("reconcile", reconcile_job), "interval", minutes=5, id="reconcile"
+    )
     # Tăng từ 10s → 30s vì Redis kick xử lý near-realtime; tick còn lại
     # đóng vai trò safety-net khi Redis unavailable hoặc miss message.
-    scheduler.add_job(webhook_job, "interval", seconds=30, id="webhook")
     scheduler.add_job(
-        notification_dispatch_job,
+        _wrap("webhook", webhook_job), "interval", seconds=30, id="webhook"
+    )
+    scheduler.add_job(
+        _wrap("notification-dispatch", notification_dispatch_job),
         "interval",
         seconds=5,
         id="notification-dispatch",
     )
-    scheduler.add_job(expire_subscriptions_job, "interval", hours=1, id="expire-subs")
     scheduler.add_job(
-        subscription_expiring_soon_job,
+        _wrap("expire-subs", expire_subscriptions_job),
+        "interval",
+        hours=1,
+        id="expire-subs",
+    )
+    scheduler.add_job(
+        _wrap("expire-soon", subscription_expiring_soon_job),
         "interval",
         hours=12,
         id="expire-soon",
+    )
+    scheduler.add_job(
+        _wrap("audit-retention", audit_log_retention_job),
+        "interval",
+        hours=24,
+        id="audit-retention",
     )
     scheduler.start()
     logger.info("scheduler_started")

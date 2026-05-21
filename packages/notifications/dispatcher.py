@@ -7,6 +7,10 @@ Outbox pattern: ``notify`` chỉ ghi DB (`Notification` row mỗi channel).
 Email/Telegram được gửi async qua ``dispatch_pending_notifications`` trong
 scheduler — tránh chặn critical path ingest bởi SMTP/HTTP timeout.
 
+Retry/DLQ: rows có ``status='pending'`` và ``next_run_at <= now`` mới được
+pick. Khi gửi fail, ``attempt`` tăng và ``next_run_at`` đẩy theo backoff
+(1m, 5m, 30m, 2h, 12h). Sau ``max_attempts`` thì chuyển ``status='dead'``.
+
 Cần commit của caller để các row Notification visible. Caller chịu trách nhiệm
 ``await session.commit()`` sau khi gọi ``notify``.
 """
@@ -14,16 +18,17 @@ Cần commit của caller để các row Notification visible. Caller chịu tr�
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.db.models import Notification, NotificationPreference, User
 from packages.notifications.email import send_email
 from packages.notifications.in_app import create_in_app
 from packages.notifications.telegram import send_telegram
+from packages.obs import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +40,10 @@ DEFAULT_CHANNELS: dict[str, list[str]] = {
     "webhook_failing": ["in_app", "telegram"],
     "bank_login_failed": ["in_app", "email", "telegram"],
 }
+
+# Exponential-ish backoff (giây): 1m, 5m, 30m, 2h, 12h.
+_RETRY_DELAYS_SEC = (60, 300, 1800, 7200, 43200)
+_MAX_ATTEMPTS = len(_RETRY_DELAYS_SEC)
 
 
 async def _enabled_channels(
@@ -84,6 +93,7 @@ async def notify(
         )
         # in_app coi như đã "delivered" ngay — UI query trực tiếp.
         record.sent_at = now
+        record.status = "sent"
     if "email" in channels:
         session.add(
             Notification(
@@ -93,6 +103,9 @@ async def notify(
                 title=title,
                 body=body,
                 payload_json={**(payload or {}), "to": user.email},
+                status="pending",
+                next_run_at=now,
+                max_attempts=_MAX_ATTEMPTS,
             )
         )
     if "telegram" in channels and user.telegram_chat_id:
@@ -107,6 +120,9 @@ async def notify(
                     **(payload or {}),
                     "chat_id": user.telegram_chat_id,
                 },
+                status="pending",
+                next_run_at=now,
+                max_attempts=_MAX_ATTEMPTS,
             )
         )
 
@@ -114,21 +130,28 @@ async def notify(
 async def dispatch_pending_notifications(
     session: AsyncSession, *, batch_size: int = 100
 ) -> int:
-    """Gửi tất cả Notification có ``sent_at IS NULL`` qua channel tương ứng.
+    """Gửi tất cả Notification có ``status='pending'`` và due theo ``next_run_at``.
 
-    Trả về số notification đã gửi thành công.
+    Trả về số notification đã gửi thành công ở batch này.
 
-    Idempotency: dùng ``sent_at`` làm flag — gửi xong thì set; nếu gửi fail
-    thì không set, lần sau sẽ thử lại. Notification cũ hơn 24h và vẫn fail
-    sẽ được skip ở lần thứ N (chống bão SMTP) — TODO khi cần.
+    Khi gửi fail: tăng ``attempt``, đẩy ``next_run_at`` theo backoff. Sau
+    ``max_attempts`` → ``status='dead'`` (DLQ, admin xử lý sau).
     """
+    now = datetime.now(UTC)
     rows = list(
         (
             await session.scalars(
                 select(Notification)
-                .where(Notification.sent_at.is_(None))
                 .where(Notification.channel.in_(("email", "telegram")))
-                .order_by(Notification.created_at.asc())
+                .where(
+                    or_(
+                        Notification.status == "pending",
+                        # backward compat: rows cũ chưa có status nhưng còn sent_at IS NULL.
+                        Notification.status.is_(None),
+                    )
+                )
+                .where(Notification.next_run_at <= now)
+                .order_by(Notification.next_run_at.asc())
                 .limit(batch_size)
             )
         ).all()
@@ -136,27 +159,47 @@ async def dispatch_pending_notifications(
     if not rows:
         return 0
 
-    delivered_ids: list[str] = []
+    delivered = 0
     for row in rows:
         try:
             ok = await _deliver(session, row)
-        except Exception:  # noqa: BLE001
+            err: str | None = None
+        except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "notification_dispatch_failed",
                 extra={"id": row.id, "channel": row.channel, "kind": row.kind},
             )
             ok = False
-        if ok:
-            delivered_ids.append(row.id)
+            err = f"{type(exc).__name__}: {exc}"[:500]
 
-    if delivered_ids:
-        await session.execute(
-            update(Notification)
-            .where(Notification.id.in_(delivered_ids))
-            .values(sent_at=datetime.now(UTC))
-        )
-        await session.commit()
-    return len(delivered_ids)
+        if ok:
+            row.status = "sent"
+            row.sent_at = datetime.now(UTC)
+            row.last_error = None
+            metrics.notification_dispatch_total.labels(
+                channel=row.channel, result="sent"
+            ).inc()
+            delivered += 1
+        else:
+            row.attempt = (row.attempt or 0) + 1
+            if row.attempt >= (row.max_attempts or _MAX_ATTEMPTS):
+                row.status = "dead"
+                row.last_error = err or "max attempts exceeded"
+                metrics.notification_dispatch_total.labels(
+                    channel=row.channel, result="dead"
+                ).inc()
+            else:
+                idx = min(row.attempt - 1, len(_RETRY_DELAYS_SEC) - 1)
+                row.next_run_at = datetime.now(UTC) + timedelta(
+                    seconds=_RETRY_DELAYS_SEC[idx]
+                )
+                row.last_error = err
+                metrics.notification_dispatch_total.labels(
+                    channel=row.channel, result="retry"
+                ).inc()
+
+    await session.commit()
+    return delivered
 
 
 async def _deliver(session: AsyncSession, row: Notification) -> bool:

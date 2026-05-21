@@ -40,9 +40,9 @@ export function AdminDashboardPage() {
       hint: "active / tổng",
     },
     {
-      title: "Đơn pending",
-      value: stats.data ? String(stats.data.orders_pending) : null,
-      hint: `${stats.data?.orders_paid_24h ?? 0} đơn paid trong 24h`,
+      title: "Doanh thu 30d",
+      value: stats.data ? formatVnd(stats.data.revenue_30d_vnd) : null,
+      hint: stats.data ? `MRR ${formatVnd(stats.data.mrr_vnd)}` : "—",
     },
     {
       title: "Số dư hệ thống",
@@ -54,6 +54,18 @@ export function AdminDashboardPage() {
       value: stats.data ? String(stats.data.subscriptions_active) : null,
       hint: `${stats.data?.bank_accounts ?? 0} bank account active`,
     },
+    {
+      title: "API key active",
+      value: stats.data ? String(stats.data.api_keys_active) : null,
+      hint: stats.data
+        ? `${stats.data.requests_24h.toLocaleString("vi-VN")} request hôm nay`
+        : "—",
+    },
+    {
+      title: "Đơn pending",
+      value: stats.data ? String(stats.data.orders_pending) : null,
+      hint: `${stats.data?.orders_paid_24h ?? 0} đơn paid trong 24h`,
+    },
   ];
 
   return (
@@ -64,7 +76,7 @@ export function AdminDashboardPage() {
           Tổng quan hệ thống. Vào các trang con để vận hành.
         </p>
       </div>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
           <Card key={c.title}>
             <CardHeader className="pb-2">
@@ -149,3 +161,6 @@ export { AdminCouponsPage } from "./coupons";
 export { AdminBankAccountsPage } from "./bank-accounts";
 export { AdminConfigPage } from "./config";
 export { AdminAuditLogPage } from "./audit-log";
+export { AdminApiKeysPage } from "./api-keys";
+export { AdminUsagePage } from "./usage";
+export { AdminRevenuePage } from "./revenue";

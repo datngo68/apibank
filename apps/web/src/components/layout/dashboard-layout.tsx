@@ -18,6 +18,8 @@ import {
   LogOut,
   ChevronRight,
   TicketPercent,
+  Activity,
+  TrendingUp,
 } from "lucide-react";
 import { useEffect } from "react";
 import { Logo } from "@/components/logo";
@@ -59,6 +61,9 @@ const NAV: NavItem[] = [
 const ADMIN_NAV: NavItem[] = [
   { to: "/app/admin", label: "Admin dashboard", icon: ShieldCheck, end: true },
   { to: "/app/admin/users", label: "Người dùng", icon: Users },
+  { to: "/app/admin/api-keys", label: "API keys", icon: KeyRound },
+  { to: "/app/admin/usage", label: "Lượt request", icon: Activity },
+  { to: "/app/admin/revenue", label: "Doanh thu", icon: TrendingUp },
   { to: "/app/admin/plans", label: "Plans", icon: CreditCard },
   { to: "/app/admin/coupons", label: "Mã giảm giá", icon: TicketPercent },
   { to: "/app/admin/bank-accounts", label: "Ngân hàng hệ thống", icon: Banknote },

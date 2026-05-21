@@ -22,6 +22,10 @@ def get_engine() -> AsyncEngine:
         if url.startswith("sqlite"):
             _engine = create_async_engine(url, pool_pre_ping=True)
         else:
+            # statement_timeout 30s ngăn slow query chiếm connection lâu.
+            connect_args: dict[str, object] = {
+                "server_settings": {"statement_timeout": "30000"},
+            }
             _engine = create_async_engine(
                 url,
                 pool_pre_ping=True,
@@ -29,6 +33,7 @@ def get_engine() -> AsyncEngine:
                 max_overflow=20,
                 pool_recycle=1800,
                 pool_timeout=10,
+                connect_args=connect_args,
             )
     return _engine
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Plus, Ban } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -29,9 +30,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { adminEndpoints, toApiError, type AdminUserListItem, type AdminUserDetail as AdminUserDetailType } from "@/lib/api";
+import {
+  adminEndpoints,
+  toApiError,
+  type AdminApiKeyCreated,
+  type AdminApiKeyRead,
+  type AdminUserListItem,
+  type AdminUserDetail as AdminUserDetailType,
+} from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { formatVnd, formatDateTime } from "@/lib/utils";
+import { formatVnd, formatDateTime, relativeTime } from "@/lib/utils";
+import {
+  AdminCreateApiKeyDialog,
+  AdminRawKeyReveal,
+} from "./api-keys";
+import { UsageBarChart } from "./usage";
 
 export function AdminUsersPage() {
   const [q, setQ] = useState("");
@@ -185,6 +198,8 @@ function UserDrawer({ userId, onClose }: { userId: string; onClose: () => void }
             <TabsList>
               <TabsTrigger value="overview">Tổng quan</TabsTrigger>
               <TabsTrigger value="wallet">Ví</TabsTrigger>
+              <TabsTrigger value="api-keys">API keys</TabsTrigger>
+              <TabsTrigger value="usage">Lượt request</TabsTrigger>
               <TabsTrigger value="security">Bảo mật</TabsTrigger>
             </TabsList>
             <TabsContent value="overview">
@@ -192,6 +207,12 @@ function UserDrawer({ userId, onClose }: { userId: string; onClose: () => void }
             </TabsContent>
             <TabsContent value="wallet">
               <WalletTab userId={userId} detail={detail.data} onChanged={() => { detail.refetch(); refresh(); }} />
+            </TabsContent>
+            <TabsContent value="api-keys">
+              <ApiKeysTab userId={userId} userEmail={detail.data.email} />
+            </TabsContent>
+            <TabsContent value="usage">
+              <UsageTab userId={userId} />
             </TabsContent>
             <TabsContent value="security">
               <SecurityTab userId={userId} detail={detail.data} onChanged={() => detail.refetch()} />
@@ -503,6 +524,241 @@ function Stat({
       </div>
       <div className={`text-base ${mono ? "font-mono" : ""}`}>{value}</div>
       {hint ? <div className="text-xs text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+function ApiKeysTab({
+  userId,
+  userEmail,
+}: {
+  userId: string;
+  userEmail: string;
+}) {
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
+  const [created, setCreated] = useState<AdminApiKeyCreated | null>(null);
+
+  const list = useQuery({
+    queryKey: ["admin", "users", userId, "api-keys"],
+    queryFn: async () =>
+      (await adminEndpoints.listUserApiKeys(userId)).data,
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => adminEndpoints.revokeApiKey(id),
+    onSuccess: () => {
+      toast.success("Đã thu hồi");
+      qc.invalidateQueries({ queryKey: ["admin", "users", userId, "api-keys"] });
+      qc.invalidateQueries({ queryKey: ["admin", "api-keys"] });
+    },
+    onError: (err) => toast.error(toApiError(err).detail),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          API key user dùng để gọi /v1/*. Tạo hộ chỉ khi user mất key gốc.
+        </p>
+        <Button size="sm" onClick={() => setOpen(true)}>
+          <Plus aria-hidden /> Tạo key
+        </Button>
+      </div>
+
+      {created ? (
+        <AdminRawKeyReveal
+          keyData={created}
+          onClose={() => setCreated(null)}
+        />
+      ) : null}
+
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tên</TableHead>
+              <TableHead>Scopes</TableHead>
+              <TableHead>Last used</TableHead>
+              <TableHead>Trạng thái</TableHead>
+              <TableHead>Tạo</TableHead>
+              <TableHead className="text-right">Thao tác</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {list.isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6}>
+                  <Skeleton className="h-6 w-full" />
+                </TableCell>
+              </TableRow>
+            ) : (list.data?.length ?? 0) === 0 ? (
+              <TableEmpty colSpan={6}>User chưa có API key.</TableEmpty>
+            ) : (
+              list.data?.map((k: AdminApiKeyRead) => (
+                <TableRow key={k.id}>
+                  <TableCell>{k.name ?? "(không tên)"}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {k.scopes.map((s) => (
+                        <Badge key={s} variant="muted">
+                          {s}
+                        </Badge>
+                      ))}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {k.last_used_at ? relativeTime(k.last_used_at) : "Chưa dùng"}
+                  </TableCell>
+                  <TableCell>
+                    {k.revoked_at ? (
+                      <Badge variant="warning">đã thu hồi</Badge>
+                    ) : (
+                      <Badge variant="success">active</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDateTime(k.created_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!!k.revoked_at}
+                      loading={revoke.isPending && revoke.variables === k.id}
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: "Thu hồi API key",
+                          description: `Mọi request dùng "${k.name ?? k.id}" sẽ bị 401.`,
+                          confirmText: "Thu hồi",
+                          variant: "destructive",
+                        });
+                        if (ok) revoke.mutate(k.id);
+                      }}
+                    >
+                      <Ban aria-hidden /> Thu hồi
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <AdminCreateApiKeyDialog
+        userId={userId}
+        userEmail={userEmail}
+        open={open}
+        onOpenChange={setOpen}
+        onCreated={(c) => {
+          setCreated(c);
+          setOpen(false);
+          qc.invalidateQueries({
+            queryKey: ["admin", "users", userId, "api-keys"],
+          });
+          qc.invalidateQueries({ queryKey: ["admin", "api-keys"] });
+        }}
+      />
+    </div>
+  );
+}
+
+function UsageTab({ userId }: { userId: string }) {
+  const usage = useQuery({
+    queryKey: ["admin", "users", userId, "usage"],
+    queryFn: async () => (await adminEndpoints.userUsage(userId, 30)).data,
+  });
+
+  if (usage.isLoading) {
+    return <Skeleton className="h-40 w-full" />;
+  }
+  if (!usage.data) {
+    return <p className="text-sm text-muted-foreground">Chưa có dữ liệu.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <Stat
+          label="Tổng request 30d"
+          value={usage.data.total_count.toLocaleString("vi-VN")}
+          mono
+        />
+        <Stat
+          label="Lỗi 30d"
+          value={usage.data.total_errors.toLocaleString("vi-VN")}
+          mono
+        />
+        <Stat
+          label="Số API key đã dùng"
+          value={String(usage.data.by_api_key.length)}
+        />
+      </div>
+      <div className="rounded-md border p-3">
+        <div className="mb-2 text-sm font-semibold">Request theo ngày</div>
+        <UsageBarChart points={usage.data.points} />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-md border">
+          <div className="border-b px-3 py-2 text-sm font-semibold">
+            Theo API key
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Key</TableHead>
+                <TableHead className="text-right">Request</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {usage.data.by_api_key.length === 0 ? (
+                <TableEmpty colSpan={2}>Không có dữ liệu.</TableEmpty>
+              ) : (
+                usage.data.by_api_key.map((r) => (
+                  <TableRow key={r.api_key_id}>
+                    <TableCell className="text-xs">
+                      {r.name ?? r.api_key_id}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {r.count.toLocaleString("vi-VN")}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="rounded-md border">
+          <div className="border-b px-3 py-2 text-sm font-semibold">
+            Theo endpoint
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Endpoint</TableHead>
+                <TableHead className="text-right">Request</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {usage.data.by_endpoint.length === 0 ? (
+                <TableEmpty colSpan={2}>Không có dữ liệu.</TableEmpty>
+              ) : (
+                usage.data.by_endpoint.map((r) => (
+                  <TableRow key={r.endpoint_group}>
+                    <TableCell>
+                      <code className="text-xs">{r.endpoint_group}</code>
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {r.count.toLocaleString("vi-VN")}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
     </div>
   );
 }

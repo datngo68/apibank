@@ -13,12 +13,25 @@ from apps.api.middleware.csrf import CsrfMiddleware
 from apps.api.middleware.http_metrics import HttpMetricsMiddleware
 from apps.api.middleware.rate_limit import RateLimitMiddleware
 from apps.api.middleware.security_headers import SecurityHeadersMiddleware
+from apps.api.middleware.system_gates import (
+    IpBlocklistMiddleware,
+    MaintenanceMiddleware,
+)
+from apps.api.middleware.usage_metering import UsageMeteringMiddleware
+from apps.api.routes.admin_analytics import router as admin_analytics_router
+from apps.api.routes.admin_billing import router as admin_billing_router
+from apps.api.routes.admin_compliance import router as admin_compliance_router
 from apps.api.routes.admin_console import router as admin_console_router
+from apps.api.routes.admin_ops import router as admin_ops_router
+from apps.api.routes.admin_system import router as admin_system_router
+from apps.api.routes.admin_users_extra import router as admin_users_extra_router
 from apps.api.routes.auth import router as auth_router
 from apps.api.routes.bank_accounts import router as bank_accounts_router
+from apps.api.routes.content import router as content_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.me import public_router as me_public_router
 from apps.api.routes.me import router as me_router
+from apps.api.routes.me_extra import router as me_extra_router
 from apps.api.routes.metrics import router as metrics_router
 from apps.api.routes.orders import router as orders_router
 from apps.api.routes.payment import router as payment_router
@@ -85,20 +98,32 @@ def create_app() -> FastAPI:
     app.add_middleware(CsrfMiddleware, secure=cookie_secure)
     app.add_middleware(SecurityHeadersMiddleware, environment=settings.environment)
     app.add_middleware(HttpMetricsMiddleware)
+    app.add_middleware(UsageMeteringMiddleware)
+    # System gates đặt trên cùng để chặn sớm trước RateLimit/Session.
+    app.add_middleware(MaintenanceMiddleware)
+    app.add_middleware(IpBlocklistMiddleware)
     app.include_router(health_router)
     app.include_router(metrics_router)
     app.include_router(auth_router)
     app.include_router(me_router)
     app.include_router(me_public_router)
+    app.include_router(me_extra_router)
     app.include_router(orders_router, prefix="/v1")
     app.include_router(transactions_router, prefix="/v1")
     app.include_router(webhooks_router, prefix="/v1")
     app.include_router(bank_accounts_router, prefix="/v1")
     app.include_router(admin_console_router)
+    app.include_router(admin_ops_router)
+    app.include_router(admin_system_router)
+    app.include_router(admin_billing_router)
+    app.include_router(admin_users_extra_router)
+    app.include_router(admin_analytics_router)
+    app.include_router(admin_compliance_router)
     app.include_router(telegram_router)
     app.include_router(topup_stream_router)
     app.include_router(payment_router)
     app.include_router(qr_router)
+    app.include_router(content_router)
 
     # SPA static + fallback (đăng ký SAU mọi router API)
     mount_spa(app)

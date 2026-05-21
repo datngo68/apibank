@@ -69,10 +69,56 @@ def require_role(*roles: str) -> Callable[[User], Awaitable[User]]:
 require_admin = require_role("admin", "owner")
 
 
-async def current_admin_user(user: User = Depends(current_user)) -> User:
-    """Dependency cho /api/v1/admin/* — chặn user thường."""
+async def current_admin_user(
+    request: Request,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Dependency cho /api/v1/admin/* — chặn user thường + enforce IP/2FA."""
     if user.role not in ("admin", "owner"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="admin only"
         )
+
+    # IP allowlist (nếu set qua AppConfig). Format: list CIDR.
+    try:
+        from packages.config import runtime as config_runtime
+
+        cfg = await config_runtime.get_config(session, "admin_security")
+    except Exception:  # noqa: BLE001
+        cfg = {}
+    allowlist = cfg.get("ip_allowlist") or []
+    if allowlist and request.client:
+        import ipaddress
+
+        try:
+            ip = ipaddress.ip_address(request.client.host)
+        except ValueError:
+            ip = None
+        if ip is not None:
+            allowed = False
+            for cidr in allowlist:
+                try:
+                    if ip in ipaddress.ip_network(cidr, strict=False):
+                        allowed = True
+                        break
+                except ValueError:
+                    continue
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="admin ip not allowlisted",
+                )
+
+    # 2FA enforcement: nếu cfg.require_2fa=True, admin phải có TwoFactor enabled.
+    if cfg.get("require_2fa"):
+        from packages.db.models import TwoFactor
+
+        twofa = await session.get(TwoFactor, user.id)
+        if twofa is None or twofa.enabled_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="admin 2FA required; please enroll first",
+            )
+
     return user

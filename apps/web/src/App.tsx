@@ -27,6 +27,9 @@ import {
   AdminBankAccountsPage,
   AdminConfigPage,
   AdminAuditLogPage,
+  AdminApiKeysPage,
+  AdminUsagePage,
+  AdminRevenuePage,
 } from "@/pages/admin";
 
 function NotFound() {
@@ -78,6 +81,9 @@ export function App() {
         <Route path="admin/plans" element={<AdminPlansPage />} />
         <Route path="admin/coupons" element={<AdminCouponsPage />} />
         <Route path="admin/bank-accounts" element={<AdminBankAccountsPage />} />
+        <Route path="admin/api-keys" element={<AdminApiKeysPage />} />
+        <Route path="admin/usage" element={<AdminUsagePage />} />
+        <Route path="admin/revenue" element={<AdminRevenuePage />} />
         <Route path="admin/config" element={<AdminConfigPage />} />
         <Route path="admin/audit-log" element={<AdminAuditLogPage />} />
       </Route>

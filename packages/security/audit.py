@@ -5,6 +5,10 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.db.models import AuditLog
+from packages.security.pii import encrypt_pii_dict
+
+# Target type chứa PII nhạy cảm — encrypt before_json/after_json khi setting bật.
+_PII_TARGET_TYPES = {"user", "bank_account", "api_key"}
 
 
 async def record_audit(
@@ -19,6 +23,9 @@ async def record_audit(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
 ) -> AuditLog:
+    if target_type in _PII_TARGET_TYPES:
+        before = encrypt_pii_dict(before)
+        after = encrypt_pii_dict(after)
     log = AuditLog(
         actor=actor,
         action=action,

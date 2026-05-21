@@ -50,6 +50,7 @@ from packages.schemas.auth import (
 )
 from packages.security import oauth_google
 from packages.security.audit import record_audit
+from packages.security.captcha import verify_captcha
 from packages.security.email_tokens import (
     KIND_RESET,
     KIND_VERIFY,
@@ -98,6 +99,11 @@ SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 # Rate-limit theo email cho các endpoint nhạy cảm: capacity hits / 60s window.
 _AUTH_RL_CAPACITY = 10
 _auth_email_limiter = InMemoryRateLimiter(capacity=_AUTH_RL_CAPACITY, window_seconds=60)
+# Per-IP cho register/forgot/login: chặn 1 IP rotate qua nhiều email.
+_AUTH_IP_RL_CAPACITY = 30
+_auth_ip_limiter = InMemoryRateLimiter(
+    capacity=_AUTH_IP_RL_CAPACITY, window_seconds=60
+)
 
 
 async def _enforce_auth_rate_limit(action: str, email: str) -> None:
@@ -111,6 +117,19 @@ async def _enforce_auth_rate_limit(action: str, email: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="too many auth attempts; try again later",
+            headers={"Retry-After": str(int(decision.retry_after_seconds))},
+        )
+
+
+async def _enforce_ip_rate_limit(action: str, ip: str | None) -> None:
+    """Throw 429 khi 1 IP gọi register/forgot/login quá nhiều (chặn bot rotate email)."""
+    if not ip:
+        return
+    decision = await _auth_ip_limiter.hit(f"auth-ip:{action}:{ip}")
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many requests from this IP",
             headers={"Retry-After": str(int(decision.retry_after_seconds))},
         )
 
@@ -175,7 +194,14 @@ async def register(
     session: AsyncSession = Depends(get_session),
 ) -> GenericMessage:
     email = payload.email.lower().strip()
+    await verify_captcha(
+        payload.captcha_token,
+        remote_ip=request.client.host if request.client else None,
+    )
     await _enforce_auth_rate_limit("register", email)
+    await _enforce_ip_rate_limit(
+        "register", request.client.host if request.client else None
+    )
     existing = (await session.scalars(select(User).where(User.email == email))).first()
     if existing is not None:
         # Tránh leak account đã tồn tại — luôn trả 201 generic và gửi email
@@ -239,12 +265,25 @@ async def login(
 ) -> LoginResponse:
     email = payload.email.lower().strip()
     await _enforce_auth_rate_limit("login", email)
+    await _enforce_ip_rate_limit(
+        "login", request.client.host if request.client else None
+    )
+    # CAPTCHA chỉ enforce sau khi đã có failed_login_count > 0 ở email này;
+    # với account chưa fail thì verify chỉ pass-through (token có thể null).
     user = (await session.scalars(select(User).where(User.email == email))).first()
     now = datetime.now(UTC)
 
     if user is None or user.status != "active":
         # tránh leak email tồn tại
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+
+    # Sau N lần fail trước đó, ép captcha. Tránh phiền user mỗi lần login bình
+    # thường nhưng vẫn chống brute-force.
+    if user.failed_login_count >= 3:
+        await verify_captcha(
+            payload.captcha_token,
+            remote_ip=request.client.host if request.client else None,
+        )
 
     locked_until = user.locked_until
     if locked_until is not None and locked_until.tzinfo is None:
@@ -553,10 +592,18 @@ async def resend_verify(
 @router.post("/forgot", response_model=GenericMessage)
 async def forgot(
     payload: ForgotPasswordRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> GenericMessage:
     email = payload.email.lower()
+    await verify_captcha(
+        payload.captcha_token,
+        remote_ip=request.client.host if request.client else None,
+    )
     await _enforce_auth_rate_limit("forgot", email)
+    await _enforce_ip_rate_limit(
+        "forgot", request.client.host if request.client else None
+    )
     user = (
         await session.scalars(select(User).where(User.email == email))
     ).first()
@@ -875,6 +922,14 @@ async def google_status(
             cfg["enabled"] and cfg["client_id"] and cfg["redirect_uri"]
         )
     }
+
+
+@router.get("/captcha-config")
+async def captcha_config_endpoint() -> dict[str, str | bool]:
+    """Public config (site_key + provider) cho FE render widget."""
+    from packages.security.captcha import captcha_public_config
+
+    return captcha_public_config()
 
 
 @router.get("/google/login")

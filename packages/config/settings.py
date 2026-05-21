@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_tls: bool = True
     embed_workers: bool = False
+    # Turnstile/hCaptcha: chỉ enforce khi `captcha_secret` set.
+    captcha_provider: str = "turnstile"  # turnstile | hcaptcha
+    captcha_site_key: str = ""
+    captcha_secret: str = ""
+    # Encrypt-at-rest cho PII (transactions.content, audit_log JSON). Tắt mặc
+    # định ở dev/local để không vỡ test cũ. Bật bằng APIBANK_ENCRYPT_PII=true.
+    encrypt_pii: bool = False
+    # Audit log retention: số ngày giữ lại; > giá trị này sẽ bị purge bởi
+    # job ``audit_log_retention_job`` (scheduler). 0 = không purge (mặc định).
+    audit_log_retention_days: int = 0
 
     @model_validator(mode="after")
     def _post_validate(self) -> Settings:

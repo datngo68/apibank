@@ -74,3 +74,15 @@ active_subscriptions_gauge = Gauge(
 wallet_total_balance_vnd = Gauge(
     "apibank_wallet_total_balance_vnd", "Sum of all user wallet balances in VND"
 )
+
+# --- Liveness gauges (alerted) -------------------------------------------
+poller_last_success_timestamp = Gauge(
+    "apibank_poller_last_success_timestamp",
+    "Unix timestamp của lần poll thành công gần nhất",
+    ["bank_account_id"],
+)
+scheduler_last_run_timestamp = Gauge(
+    "apibank_scheduler_last_run_timestamp",
+    "Unix timestamp lần chạy gần nhất của scheduled job",
+    ["job"],
+)

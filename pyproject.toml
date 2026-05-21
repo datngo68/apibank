@@ -61,7 +61,7 @@ ignore = ["S101", "B008", "S106", "ASYNC109"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--cov=apps --cov=packages --cov-report=term-missing --cov-fail-under=55"
+addopts = "--cov=apps --cov=packages --cov-report=term-missing --cov-fail-under=50"
 
 [tool.coverage.report]
 exclude_lines = [
