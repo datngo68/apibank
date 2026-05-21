@@ -2,7 +2,7 @@
 ###############################################################################
 # Stage 1 — build SPA
 ###############################################################################
-FROM node:20-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /web
 COPY apps/web/package*.json ./
 RUN npm ci --no-audit --no-fund
