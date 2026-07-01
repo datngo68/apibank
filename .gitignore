@@ -9,6 +9,7 @@
 *.key
 
 # Local auth / test artifacts
+migration-backup/
 .cookies.txt
 .csrf-headers.txt
 .test-login.json
