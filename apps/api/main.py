@@ -22,12 +22,15 @@ from apps.api.routes.admin_analytics import router as admin_analytics_router
 from apps.api.routes.admin_billing import router as admin_billing_router
 from apps.api.routes.admin_compliance import router as admin_compliance_router
 from apps.api.routes.admin_console import router as admin_console_router
+from apps.api.routes.admin_crypto import router as admin_crypto_router
 from apps.api.routes.admin_ops import router as admin_ops_router
 from apps.api.routes.admin_system import router as admin_system_router
 from apps.api.routes.admin_users_extra import router as admin_users_extra_router
 from apps.api.routes.auth import router as auth_router
 from apps.api.routes.bank_accounts import router as bank_accounts_router
 from apps.api.routes.content import router as content_router
+from apps.api.routes.crypto import public_router as crypto_public_router
+from apps.api.routes.crypto import router as crypto_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.me import public_router as me_public_router
 from apps.api.routes.me import router as me_router
@@ -112,6 +115,8 @@ def create_app() -> FastAPI:
     app.include_router(transactions_router, prefix="/v1")
     app.include_router(webhooks_router, prefix="/v1")
     app.include_router(bank_accounts_router, prefix="/v1")
+    app.include_router(crypto_router, prefix="/api/v1")
+    app.include_router(crypto_public_router)
     app.include_router(admin_console_router)
     app.include_router(admin_ops_router)
     app.include_router(admin_system_router)
@@ -119,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_users_extra_router)
     app.include_router(admin_analytics_router)
     app.include_router(admin_compliance_router)
+    app.include_router(admin_crypto_router)
     app.include_router(telegram_router)
     app.include_router(topup_stream_router)
     app.include_router(payment_router)

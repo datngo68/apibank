@@ -531,6 +531,231 @@ class WalletTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+class CryptoNetwork(Base):
+    __tablename__ = "crypto_networks"
+    __table_args__ = (UniqueConstraint("key", name="uq_crypto_network_key"),)
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cnet_{secrets.token_urlsafe(12)}"
+    )
+    key: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    chain_type: Mapped[str] = mapped_column(String(16), index=True)
+    chain_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    native_symbol: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    min_confirmations: Mapped[int] = mapped_column(Integer, default=12)
+    finality_blocks: Mapped[int] = mapped_column(Integer, default=64)
+    scan_batch_size: Mapped[int] = mapped_column(Integer, default=1000)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoToken(Base):
+    __tablename__ = "crypto_tokens"
+    __table_args__ = (
+        UniqueConstraint(
+            "network_id",
+            "symbol",
+            "contract_address",
+            name="uq_crypto_token_network_symbol_contract",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"ctok_{secrets.token_urlsafe(12)}"
+    )
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    contract_address: Mapped[str] = mapped_column(String(128), index=True)
+    decimals: Mapped[int] = mapped_column(Integer, default=18)
+    min_invoice_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18), default=Decimal("1"))
+    max_invoice_amount: Mapped[Decimal] = mapped_column(
+        Numeric(36, 18), default=Decimal("100000")
+    )
+    dust_precision: Mapped[int] = mapped_column(Integer, default=6)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoRpcEndpoint(Base):
+    __tablename__ = "crypto_rpc_endpoints"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"crpc_{secrets.token_urlsafe(12)}"
+    )
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    url_enc: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(64))
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    rate_limit_per_sec: Mapped[int] = mapped_column(Integer, default=5)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    last_ok_at: Mapped[datetime | None]
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoWallet(Base):
+    __tablename__ = "crypto_wallets"
+    __table_args__ = (
+        UniqueConstraint("network_id", "address", name="uq_crypto_wallet_network_address"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cwal_{secrets.token_urlsafe(12)}"
+    )
+    owner_type: Mapped[str] = mapped_column(String(16), default="system", index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    max_active_invoices: Mapped[int] = mapped_column(Integer, default=100)
+    active_invoice_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoInvoice(Base):
+    __tablename__ = "crypto_invoices"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "request_id", name="uq_crypto_invoice_merchant_request"),
+        Index("ix_crypto_invoice_status_expires", "status", "expires_at"),
+        Index(
+            "ix_crypto_invoice_match",
+            "network_id",
+            "token_id",
+            "address",
+            "pay_amount",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cinv_{secrets.token_urlsafe(16)}"
+    )
+    trans_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(128), index=True)
+    merchant_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    token_id: Mapped[str] = mapped_column(ForeignKey("crypto_tokens.id"), index=True)
+    wallet_id: Mapped[str] = mapped_column(ForeignKey("crypto_wallets.id"), index=True)
+    address: Mapped[str] = mapped_column(String(128), index=True)
+    requested_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18))
+    pay_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18))
+    received_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18), default=Decimal(0))
+    currency_amount_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
+    fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(36, 8), nullable=True)
+    fx_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fx_locked_at: Mapped[datetime | None]
+    status: Mapped[str] = mapped_column(String(24), default="waiting", index=True)
+    expires_at: Mapped[datetime] = mapped_column(index=True)
+    paid_at: Mapped[datetime | None]
+    canceled_at: Mapped[datetime | None]
+    callback_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    success_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_address: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    confirmations: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoChainTransfer(Base):
+    __tablename__ = "crypto_chain_transfers"
+    __table_args__ = (
+        UniqueConstraint("network_id", "tx_hash", "log_index", name="uq_crypto_transfer_log"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"ctr_{secrets.token_urlsafe(16)}"
+    )
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    token_id: Mapped[str] = mapped_column(ForeignKey("crypto_tokens.id"), index=True)
+    tx_hash: Mapped[str] = mapped_column(String(128), index=True)
+    log_index: Mapped[int] = mapped_column(Integer, default=0)
+    from_address: Mapped[str] = mapped_column(String(128), index=True)
+    to_address: Mapped[str] = mapped_column(String(128), index=True)
+    amount_raw: Mapped[str] = mapped_column(String(96))
+    amount_decimal: Mapped[Decimal] = mapped_column(Numeric(36, 18))
+    block_number: Mapped[int] = mapped_column(Integer, index=True)
+    block_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    block_time: Mapped[datetime | None]
+    confirmations: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="seen", index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class CryptoInvoiceMatch(Base):
+    __tablename__ = "crypto_invoice_matches"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "transfer_id", name="uq_crypto_invoice_transfer"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cim_{secrets.token_urlsafe(16)}"
+    )
+    invoice_id: Mapped[str] = mapped_column(ForeignKey("crypto_invoices.id"), index=True)
+    transfer_id: Mapped[str] = mapped_column(ForeignKey("crypto_chain_transfers.id"), index=True)
+    matched_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18))
+    match_type: Mapped[str] = mapped_column(String(24), default="exact")
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class CryptoCallback(Base):
+    __tablename__ = "crypto_callbacks"
+    __table_args__ = (Index("ix_crypto_callbacks_state_next", "state", "next_retry_at"),)
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"ccb_{secrets.token_urlsafe(16)}"
+    )
+    invoice_id: Mapped[str] = mapped_column(ForeignKey("crypto_invoices.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=6)
+    next_retry_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
+    last_status_code: Mapped[int | None]
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    sent_at: Mapped[datetime | None]
+
+
+class CryptoWatcherCursor(Base):
+    __tablename__ = "crypto_watcher_cursors"
+    __table_args__ = (
+        UniqueConstraint(
+            "network_id", "token_id", "wallet_group_hash", name="uq_crypto_watcher_cursor"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: f"cwc_{secrets.token_urlsafe(12)}"
+    )
+    network_id: Mapped[str] = mapped_column(ForeignKey("crypto_networks.id"), index=True)
+    token_id: Mapped[str] = mapped_column(ForeignKey("crypto_tokens.id"), index=True)
+    wallet_group_hash: Mapped[str] = mapped_column(String(128), default="default")
+    last_scanned_block: Mapped[int] = mapped_column(Integer, default=0)
+    last_finalized_block: Mapped[int] = mapped_column(Integer, default=0)
+    lock_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    locked_until: Mapped[datetime | None]
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 
