@@ -8,6 +8,7 @@ Create Date: 2026-07-01
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0017_crypto_gateway"
@@ -52,7 +53,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(
-            "network_id", "symbol", "contract_address", name="uq_crypto_token_network_symbol_contract"
+            "network_id",
+            "symbol",
+            "contract_address",
+            name="uq_crypto_token_network_symbol_contract",
         ),
     )
     op.create_index("ix_crypto_tokens_network_id", "crypto_tokens", ["network_id"])
@@ -148,7 +152,9 @@ def upgrade() -> None:
     op.create_index("ix_crypto_invoices_expires_at", "crypto_invoices", ["expires_at"])
     op.create_index("ix_crypto_invoice_status_expires", "crypto_invoices", ["status", "expires_at"])
     op.create_index(
-        "ix_crypto_invoice_match", "crypto_invoices", ["network_id", "token_id", "address", "pay_amount"]
+        "ix_crypto_invoice_match",
+        "crypto_invoices",
+        ["network_id", "token_id", "address", "pay_amount"],
     )
 
     op.create_table(
@@ -171,21 +177,35 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("network_id", "tx_hash", "log_index", name="uq_crypto_transfer_log"),
     )
-    for col in ["network_id", "token_id", "tx_hash", "from_address", "to_address", "block_number", "status"]:
+    for col in [
+        "network_id",
+        "token_id",
+        "tx_hash",
+        "from_address",
+        "to_address",
+        "block_number",
+        "status",
+    ]:
         op.create_index(f"ix_crypto_chain_transfers_{col}", "crypto_chain_transfers", [col])
 
     op.create_table(
         "crypto_invoice_matches",
         sa.Column("id", sa.String(64), primary_key=True),
         sa.Column("invoice_id", sa.String(64), sa.ForeignKey("crypto_invoices.id"), nullable=False),
-        sa.Column("transfer_id", sa.String(64), sa.ForeignKey("crypto_chain_transfers.id"), nullable=False),
+        sa.Column(
+            "transfer_id", sa.String(64), sa.ForeignKey("crypto_chain_transfers.id"), nullable=False
+        ),
         sa.Column("matched_amount", sa.Numeric(36, 18), nullable=False),
         sa.Column("match_type", sa.String(24), nullable=False, server_default="exact"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("invoice_id", "transfer_id", name="uq_crypto_invoice_transfer"),
     )
-    op.create_index("ix_crypto_invoice_matches_invoice_id", "crypto_invoice_matches", ["invoice_id"])
-    op.create_index("ix_crypto_invoice_matches_transfer_id", "crypto_invoice_matches", ["transfer_id"])
+    op.create_index(
+        "ix_crypto_invoice_matches_invoice_id", "crypto_invoice_matches", ["invoice_id"]
+    )
+    op.create_index(
+        "ix_crypto_invoice_matches_transfer_id", "crypto_invoice_matches", ["transfer_id"]
+    )
 
     op.create_table(
         "crypto_callbacks",
@@ -207,7 +227,9 @@ def upgrade() -> None:
     op.create_index("ix_crypto_callbacks_event_type", "crypto_callbacks", ["event_type"])
     op.create_index("ix_crypto_callbacks_next_retry_at", "crypto_callbacks", ["next_retry_at"])
     op.create_index("ix_crypto_callbacks_state", "crypto_callbacks", ["state"])
-    op.create_index("ix_crypto_callbacks_state_next", "crypto_callbacks", ["state", "next_retry_at"])
+    op.create_index(
+        "ix_crypto_callbacks_state_next", "crypto_callbacks", ["state", "next_retry_at"]
+    )
 
     op.create_table(
         "crypto_watcher_cursors",
@@ -220,9 +242,13 @@ def upgrade() -> None:
         sa.Column("lock_owner", sa.String(64), nullable=True),
         sa.Column("locked_until", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("network_id", "token_id", "wallet_group_hash", name="uq_crypto_watcher_cursor"),
+        sa.UniqueConstraint(
+            "network_id", "token_id", "wallet_group_hash", name="uq_crypto_watcher_cursor"
+        ),
     )
-    op.create_index("ix_crypto_watcher_cursors_network_id", "crypto_watcher_cursors", ["network_id"])
+    op.create_index(
+        "ix_crypto_watcher_cursors_network_id", "crypto_watcher_cursors", ["network_id"]
+    )
     op.create_index("ix_crypto_watcher_cursors_token_id", "crypto_watcher_cursors", ["token_id"])
 
 
@@ -239,12 +265,31 @@ def downgrade() -> None:
     op.drop_index("ix_crypto_invoice_matches_transfer_id", table_name="crypto_invoice_matches")
     op.drop_index("ix_crypto_invoice_matches_invoice_id", table_name="crypto_invoice_matches")
     op.drop_table("crypto_invoice_matches")
-    for col in ["status", "block_number", "to_address", "from_address", "tx_hash", "token_id", "network_id"]:
+    for col in [
+        "status",
+        "block_number",
+        "to_address",
+        "from_address",
+        "tx_hash",
+        "token_id",
+        "network_id",
+    ]:
         op.drop_index(f"ix_crypto_chain_transfers_{col}", table_name="crypto_chain_transfers")
     op.drop_table("crypto_chain_transfers")
     op.drop_index("ix_crypto_invoice_match", table_name="crypto_invoices")
     op.drop_index("ix_crypto_invoice_status_expires", table_name="crypto_invoices")
-    for col in ["expires_at", "status", "address", "wallet_id", "token_id", "network_id", "user_id", "merchant_id", "request_id", "trans_id"]:
+    for col in [
+        "expires_at",
+        "status",
+        "address",
+        "wallet_id",
+        "token_id",
+        "network_id",
+        "user_id",
+        "merchant_id",
+        "request_id",
+        "trans_id",
+    ]:
         op.drop_index(f"ix_crypto_invoices_{col}", table_name="crypto_invoices")
     op.drop_table("crypto_invoices")
     for col in ["status", "address", "network_id", "owner_id", "owner_type"]:
