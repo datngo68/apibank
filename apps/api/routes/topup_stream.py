@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/me/topup", tags=["topup-stream"], include_in_schema=False)
 
 POLL_FALLBACK_SEC = 2.0       # Khi Redis unavailable
-POLL_SAFETY_SEC = 30.0        # Khi đã subscribe Redis (an toàn miss message)
+POLL_SAFETY_SEC = 0.5         # Khi đã subscribe Redis (an toàn miss message/race test)
 PUBSUB_WAIT_SEC = 1.0         # Block 1s mỗi vòng để cho phép check disconnect
 HEARTBEAT_INTERVAL_SEC = 15.0
 MAX_DURATION_SEC = 30 * 60    # 30 phút
