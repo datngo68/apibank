@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -125,6 +126,18 @@ function BankCard({ bank }: { bank: BankAccount }) {
     },
     onError: (err) => toast.error(toApiError(err).detail),
   });
+  const updatePolicy = useMutation({
+    mutationFn: (poll_only_when_pending: boolean) =>
+      endpoints.updateBank(bank.id, { poll_only_when_pending }),
+    onSuccess: () => {
+      toast.success("Đã cập nhật chính sách polling");
+      qc.invalidateQueries({ queryKey: ["banks"] });
+    },
+    onError: (err) => {
+      toast.error(toApiError(err).detail);
+      qc.invalidateQueries({ queryKey: ["banks"] });
+    },
+  });
   const isVerified = !!bank.verified_at;
   const isPaused = !bank.polling_enabled;
 
@@ -167,6 +180,20 @@ function BankCard({ bank }: { bank: BankAccount }) {
           <Badge variant={bank.polling_status === "error" ? "destructive" : "muted"}>
             {bank.polling_status}
           </Badge>
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-md border p-2">
+          <div>
+            <div className="text-sm font-medium">Chỉ poll khi có đơn chờ thanh toán</div>
+            <div className="text-xs text-muted-foreground">
+              Giảm truy cập Internet Banking và hạn chế ảnh hưởng đến phiên app mobile.
+            </div>
+          </div>
+          <Switch
+            checked={bank.poll_only_when_pending}
+            disabled={updatePolicy.isPending}
+            onCheckedChange={(checked) => updatePolicy.mutate(checked)}
+            aria-label="Chỉ kiểm tra giao dịch khi có đơn chờ thanh toán"
+          />
         </div>
         <div className="text-xs text-muted-foreground">
           Lần poll cuối: {bank.last_poll_at ? relativeTime(bank.last_poll_at) : "—"}

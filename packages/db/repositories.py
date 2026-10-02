@@ -30,6 +30,9 @@ class OrderRepository:
         self._session.add(order)
         await self._session.commit()
         await self._session.refresh(order)
+        from packages.banks import poll_kick
+
+        await poll_kick.kick(order.bank_account_id)
         return order
 
     async def get_order(self, order_id: str) -> Order | None:

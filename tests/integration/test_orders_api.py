@@ -31,6 +31,48 @@ async def _bootstrap(monkeypatch_settings) -> tuple[str, str]:  # type: ignore[n
     return raw_key, bank_account_id
 
 
+async def test_create_order_kicks_bank_worker(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "kick_test.sqlite"
+    monkeypatch.setenv("APIBANK_DB_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("APIBANK_FERNET_KEYS", "")
+    monkeypatch.setenv("APIBANK_API_KEY_SALT", "test-salt")
+    get_settings.cache_clear()
+
+    import packages.db.session as session_module
+    from packages.db.models import Base
+
+    session_module._engine = None
+    session_module._sessionmaker = None
+    async with session_module.get_engine().begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    raw_key, bank_account_id = await _bootstrap(monkeypatch)
+    kicked: list[str] = []
+
+    async def fake_kick(account_id: str) -> bool:
+        kicked.append(account_id)
+        return True
+
+    monkeypatch.setattr("packages.banks.poll_kick.kick", fake_kick)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/orders",
+            json={"amount_vnd": 150000, "bank_account_id": bank_account_id, "ttl_seconds": 600},
+            headers={
+                "Authorization": f"Bearer {raw_key}",
+                "Idempotency-Key": "kick-test-key",
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert kicked == [bank_account_id]
+
+    session_module._engine = None
+    session_module._sessionmaker = None
+    get_settings.cache_clear()
+
+
 async def test_create_order_persists_and_returns_201(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "api_test.sqlite"
     monkeypatch.setenv("APIBANK_DB_URL", f"sqlite+aiosqlite:///{db_path}")

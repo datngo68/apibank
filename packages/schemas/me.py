@@ -25,9 +25,10 @@ class BankAccountRotate(BaseModel):
 
 
 class BankAccountUpdate(BaseModel):
-    """Toggle polling tạm thời (pause khi user chuyển tiền trên app mobile)."""
+    """Cập nhật chính sách polling cho tài khoản ngân hàng."""
 
-    polling_enabled: bool
+    polling_enabled: bool | None = None
+    poll_only_when_pending: bool | None = None
 
 
 class BankAccountRead(BaseModel):
@@ -39,6 +40,7 @@ class BankAccountRead(BaseModel):
     account_holder: str
     status: str
     polling_enabled: bool
+    poll_only_when_pending: bool
     polling_status: str
     last_login_at: datetime | None
     last_poll_at: datetime | None
