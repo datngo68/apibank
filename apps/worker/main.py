@@ -183,7 +183,16 @@ async def _has_active_pending_order(bank_account_id: str, now: datetime) -> bool
 
 
 async def _should_poll(account: BankAccount, now: datetime) -> bool:
-    if not account.poll_only_when_pending:
+    policy = account.poll_only_when_pending
+    if isinstance(account, BankAccount):
+        sessionmaker = get_sessionmaker()
+        async with sessionmaker() as session:
+            current_policy = await session.scalar(
+                select(BankAccount.poll_only_when_pending).where(BankAccount.id == account.id)
+            )
+        if current_policy is not None:
+            policy = bool(current_policy)
+    if not policy:
         return True
     return await _has_active_pending_order(account.id, now)
 
