@@ -110,3 +110,5 @@ desktop.ini
 *.bak
 *.tmp
 .tmp/
+
+.worktrees/
