@@ -27,7 +27,7 @@ class MBNodeBridgeAdapter:
 
     async def health(self) -> bool:
         try:
-            response = await self._client.post("/login")
+            response = await self._client.get("/health")
         except httpx.HTTPError:
             return False
         return response.status_code == 200

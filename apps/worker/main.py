@@ -17,7 +17,9 @@ from packages.banks.registry import (
     decode_credentials,
     list_active_accounts,
     load_cursor,
+    restore_adapter_session,
     save_cursor,
+    serialize_adapter_session,
 )
 from packages.config import runtime as config_runtime
 from packages.config.settings import get_settings
@@ -167,6 +169,21 @@ async def _notify_bank_login_failed(
         )
 
 
+async def _save_bank_session(
+    *, bank_account_id: str, session_enc: str | None
+) -> None:
+    if session_enc is None:
+        return
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        await session.execute(
+            update(BankAccount)
+            .where(BankAccount.id == bank_account_id)
+            .values(session_enc=session_enc)
+        )
+        await session.commit()
+
+
 async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
     settings = get_settings()
     cipher = _build_cipher()
@@ -177,6 +194,11 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
     adapter: BankAdapter = build_adapter(
         bank_code=account.bank_code, username=username, password=password
     )
+    restored_session = restore_adapter_session(
+        adapter, account.session_enc, cipher=cipher
+    )
+    if restored_session:
+        logger.info("bank_session_restored", extra={"bank_account_id": account.id})
 
     # Re-login với backoff thay vì exit task; nếu MB rớt session/captcha OCR
     # fail, task vẫn sống và tự thử lại — không cần restart server.
@@ -184,6 +206,10 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
     while not shutdown_event.is_set():
         try:
             await adapter.login()
+            await _save_bank_session(
+                bank_account_id=account.id,
+                session_enc=serialize_adapter_session(adapter, cipher=cipher),
+            )
             logger.info("bank_login_ok", extra={"bank_account_id": account.id})
             await _update_account_status(
                 bank_account_id=account.id,
@@ -238,6 +264,13 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
                         last_seen_at=end,
                         last_ref_no=last_ref,
                     )
+                    session_enc = serialize_adapter_session(adapter, cipher=cipher)
+                    if session_enc is not None:
+                        await session.execute(
+                            update(BankAccount)
+                            .where(BankAccount.id == account.id)
+                            .values(session_enc=session_enc)
+                        )
                     await session.commit()
                     metrics.poll_success_total.labels(bank=account.bank_code).inc()
                     metrics.poller_last_success_timestamp.labels(
@@ -265,6 +298,10 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
                 )
                 try:
                     await adapter.login()
+                    await _save_bank_session(
+                        bank_account_id=account.id,
+                        session_enc=serialize_adapter_session(adapter, cipher=cipher),
+                    )
                     await _update_account_status(
                         bank_account_id=account.id,
                         polling_status="running",

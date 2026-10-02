@@ -217,7 +217,12 @@ async def verify_bank_account(
     Nếu fail: lưu ``last_error``, trả 422 với chi tiết để user sửa credential.
     """
     from packages.banks.base import BankAuthError, BankRateLimited
-    from packages.banks.registry import build_adapter, decode_credentials
+    from packages.banks.registry import (
+        build_adapter,
+        decode_credentials,
+        restore_adapter_session,
+        serialize_adapter_session,
+    )
 
     cipher = _require_cipher()
     account = await _get_user_bank(session, user, bank_account_id)
@@ -226,7 +231,11 @@ async def verify_bank_account(
         adapter = build_adapter(
             bank_code=account.bank_code, username=username, password=password
         )
+        restore_adapter_session(adapter, account.session_enc, cipher=cipher)
         await adapter.login()
+        session_enc = serialize_adapter_session(adapter, cipher=cipher)
+        if session_enc is not None:
+            account.session_enc = session_enc
     except BankAuthError as exc:
         account.verified_at = None
         account.polling_status = "auth_failed"
@@ -344,6 +353,7 @@ async def rotate_bank_credentials(
     cipher = _require_cipher()
     account = await _get_user_bank(session, user, bank_account_id)
     account.credentials_enc = cipher.encrypt(f"{payload.username}:{payload.password}")
+    account.session_enc = None
     account.last_error = None
     account.verified_at = None
     await record_audit(

@@ -51,6 +51,7 @@ class BankAccount(Base):
     account_no: Mapped[str] = mapped_column(String(64), index=True)
     account_holder: Mapped[str] = mapped_column(String(255))
     credentials_enc: Mapped[str] = mapped_column(Text)
+    session_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     is_system_account: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)

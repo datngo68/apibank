@@ -39,6 +39,8 @@ class MBAdapter:
 
     async def login(self) -> None:
         client = self._ensure_client()
+        if getattr(client, "sessionId", None) is not None:
+            return
         last_error: Exception | None = None
         for _ in range(5):
             try:
@@ -52,6 +54,22 @@ class MBAdapter:
             except Exception as exc:
                 last_error = exc
         raise BankAuthError(f"login failed after 5 attempts: {last_error!r}") from last_error
+
+    def export_session(self) -> dict[str, Any] | None:
+        client = self._client
+        if client is None or getattr(client, "sessionId", None) is None:
+            return None
+        return {
+            "sessionId": client.sessionId,
+            "deviceIdCommon": client.deviceIdCommon,
+            "userinfo": client._userinfo,
+        }
+
+    def restore_session(self, state: dict[str, Any]) -> None:
+        client = self._ensure_client()
+        client.sessionId = state["sessionId"]
+        client.deviceIdCommon = state["deviceIdCommon"]
+        client._userinfo = state["userinfo"]
 
     async def health(self) -> bool:
         return self._client is not None and getattr(self._client, "sessionId", None) is not None

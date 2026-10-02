@@ -25,13 +25,16 @@ async function ensureLogin() {
 
 app.post("/login", async (_req, res, next) => {
   try {
-    await client.login();
-    loggedIn = true;
+    await ensureLogin();
     res.json({ status: "ok" });
   } catch (err) {
     loggedIn = false;
     next(err);
   }
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", loggedIn });
 });
 
 app.get("/balance/:accountNumber", async (req, res, next) => {

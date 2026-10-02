@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -6,6 +7,8 @@ import pytest
 
 from packages.banks.base import BankTransaction
 from packages.banks.mb.adapter import MBAdapter
+from packages.banks.registry import restore_adapter_session, serialize_adapter_session
+from packages.security.crypto import FernetCipher
 
 
 def test_bank_transaction_amount_must_not_be_zero() -> None:
@@ -41,6 +44,105 @@ def test_mb_adapter_maps_raw_transaction_to_bank_transaction() -> None:
     assert tx.counter_account == "0123456789"
     assert tx.counter_name == "NGUYEN VAN A"
     assert tx.posted_at == datetime(2026, 5, 16, 10, 30, 1, tzinfo=UTC)
+
+
+class _FakeOCR:
+    def process_image(self, _image: bytes) -> str:
+        return "ABCD"
+
+
+class _FakeLoginClient:
+    def __init__(self, *, session_id: str | None = None) -> None:
+        self.sessionId = session_id
+        self.login_calls = 0
+        self.captcha_calls = 0
+
+    async def get_capcha_image(self) -> bytes:
+        self.captcha_calls += 1
+        return b"captcha"
+
+    async def login(self, _captcha: str) -> None:
+        self.login_calls += 1
+        self.sessionId = "new-session"
+
+
+@pytest.mark.asyncio
+async def test_mb_login_reuses_existing_session() -> None:
+    adapter = MBAdapter(username="u", password="p")
+    fake = _FakeLoginClient(session_id="active-session")
+    adapter._client = fake  # type: ignore[assignment]
+    adapter._ocr = _FakeOCR()  # type: ignore[assignment]
+
+    await adapter.login()
+
+    assert fake.captcha_calls == 0
+    assert fake.login_calls == 0
+    assert fake.sessionId == "active-session"
+
+
+def test_mb_session_state_round_trip() -> None:
+    adapter = MBAdapter(username="u", password="p")
+    fake = _FakeLoginClient(session_id="active-session")
+    fake.deviceIdCommon = "device-1"  # type: ignore[attr-defined]
+    fake._userinfo = {"cust": {"id": "customer-1"}}  # type: ignore[attr-defined]
+    adapter._client = fake  # type: ignore[assignment]
+
+    state = adapter.export_session()
+
+    restored = MBAdapter(username="u", password="p")
+    restored_fake = _FakeLoginClient()
+    restored_fake.deviceIdCommon = "new-device"  # type: ignore[attr-defined]
+    restored_fake._userinfo = None  # type: ignore[attr-defined]
+    restored._client = restored_fake  # type: ignore[assignment]
+    restored.restore_session(json.loads(json.dumps(state)))
+
+    assert restored_fake.sessionId == "active-session"
+    assert restored_fake.deviceIdCommon == "device-1"  # type: ignore[attr-defined]
+    assert restored_fake._userinfo == {"cust": {"id": "customer-1"}}  # type: ignore[attr-defined]
+
+
+def test_mb_session_storage_is_encrypted() -> None:
+    cipher = FernetCipher.from_keys(f"primary:{FernetCipher.generate_key()}")
+    adapter = MBAdapter(username="u", password="p")
+    fake = _FakeLoginClient(session_id="secret-session")
+    fake.deviceIdCommon = "device-1"  # type: ignore[attr-defined]
+    fake._userinfo = {"customer": "secret-user"}  # type: ignore[attr-defined]
+    adapter._client = fake  # type: ignore[assignment]
+
+    encrypted = serialize_adapter_session(adapter, cipher=cipher)
+
+    assert encrypted is not None
+    assert "secret-session" not in encrypted
+
+    restored = MBAdapter(username="u", password="p")
+    restored_fake = _FakeLoginClient()
+    restored_fake.deviceIdCommon = "new-device"  # type: ignore[attr-defined]
+    restored_fake._userinfo = None  # type: ignore[attr-defined]
+    restored._client = restored_fake  # type: ignore[assignment]
+    assert restore_adapter_session(restored, encrypted, cipher=cipher) is True
+    assert restored_fake.sessionId == "secret-session"
+
+
+def test_invalid_mb_session_storage_is_ignored() -> None:
+    cipher = FernetCipher.from_keys(f"primary:{FernetCipher.generate_key()}")
+    adapter = MBAdapter(username="u", password="p")
+
+    assert restore_adapter_session(adapter, "not-a-fernet-token", cipher=cipher) is False
+    assert adapter._client is None
+
+
+@pytest.mark.asyncio
+async def test_mb_login_authenticates_when_session_is_missing() -> None:
+    adapter = MBAdapter(username="u", password="p")
+    fake = _FakeLoginClient()
+    adapter._client = fake  # type: ignore[assignment]
+    adapter._ocr = _FakeOCR()  # type: ignore[assignment]
+
+    await adapter.login()
+
+    assert fake.captcha_calls == 1
+    assert fake.login_calls == 1
+    assert fake.sessionId == "new-session"
 
 
 class _FakeMBClient:

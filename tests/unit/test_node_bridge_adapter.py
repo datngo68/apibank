@@ -23,11 +23,20 @@ async def test_login_raises_bank_auth_error_on_http_failure(
         await adapter.login()
 
 
-async def test_health_returns_true_on_200(adapter: MBNodeBridgeAdapter) -> None:
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"status": "ok"}))
+async def test_health_uses_passive_endpoint_without_logging_in(
+    adapter: MBNodeBridgeAdapter,
+) -> None:
+    requested: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append((request.method, request.url.path))
+        return httpx.Response(200, json={"status": "ok", "loggedIn": True})
+
+    transport = httpx.MockTransport(handler)
     adapter._client = httpx.AsyncClient(transport=transport, base_url="http://bridge.test")
 
     assert await adapter.health() is True
+    assert requested == [("GET", "/health")]
 
 
 async def test_get_balance_parses_decimal(adapter: MBNodeBridgeAdapter) -> None:

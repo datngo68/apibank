@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
+from cryptography.fernet import InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +52,30 @@ def decode_credentials(account: BankAccount, *, cipher: FernetCipher) -> tuple[s
     return username, password
 
 
+def serialize_adapter_session(adapter: BankAdapter, *, cipher: FernetCipher) -> str | None:
+    export = getattr(adapter, "export_session", None)
+    if export is None:
+        return None
+    state = export()
+    if state is None:
+        return None
+    return cipher.encrypt(json.dumps(state, separators=(",", ":")))
+
+
+def restore_adapter_session(
+    adapter: BankAdapter, encrypted: str | None, *, cipher: FernetCipher
+) -> bool:
+    restore = getattr(adapter, "restore_session", None)
+    if not encrypted or restore is None:
+        return False
+    try:
+        state = json.loads(cipher.decrypt(encrypted))
+        restore(state)
+    except (InvalidToken, KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 async def list_active_accounts(session: AsyncSession) -> list[BankAccount]:
     return list(
         (
@@ -89,6 +115,8 @@ __all__: list[str] = [
     "list_active_accounts",
     "load_cursor",
     "save_cursor",
+    "serialize_adapter_session",
+    "restore_adapter_session",
     "UNSUPPORTED_BANKS",
 ]
 
