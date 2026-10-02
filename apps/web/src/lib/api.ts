@@ -119,6 +119,7 @@ export interface BankAccount {
   account_holder: string;
   status: string;
   polling_enabled: boolean;
+  poll_only_when_pending: boolean;
   polling_status: string;
   is_system_account: boolean;
   last_login_at: string | null;
@@ -301,6 +302,10 @@ export const endpoints = {
     api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/rotate`, body),
   verifyBank: (id: string) =>
     api.post<BankAccount>(`/api/v1/me/bank-accounts/${id}/verify`),
+  updateBank: (
+    id: string,
+    body: { polling_enabled?: boolean; poll_only_when_pending?: boolean },
+  ) => api.patch<BankAccount>(`/api/v1/me/bank-accounts/${id}`, body),
   setBankPolling: (id: string, polling_enabled: boolean) =>
     api.patch<BankAccount>(`/api/v1/me/bank-accounts/${id}`, { polling_enabled }),
   deleteBank: (id: string) => api.delete(`/api/v1/me/bank-accounts/${id}`),

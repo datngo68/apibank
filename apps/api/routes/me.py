@@ -178,6 +178,7 @@ async def create_bank_account(
         credentials_enc=cipher.encrypt(f"{payload.username}:{payload.password}"),
         status="active",
         polling_enabled=True,
+        poll_only_when_pending=bank_code == "MB",
         polling_status="idle",
     )
     session.add(account)
@@ -312,31 +313,47 @@ async def update_bank_account(
     qua kênh pubsub (best-effort) hoặc tick rescan kế tiếp.
     """
     account = await _get_user_bank(session, user, bank_account_id)
-    if account.polling_enabled == payload.polling_enabled:
-        # Idempotent: trả về luôn, không audit.
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="at least one polling setting is required",
+        )
+    before = {
+        "polling_enabled": account.polling_enabled,
+        "poll_only_when_pending": account.poll_only_when_pending,
+    }
+    if payload.polling_enabled is not None:
+        account.polling_enabled = payload.polling_enabled
+        if payload.polling_enabled:
+            account.last_error = None
+            account.polling_status = "idle"
+    if payload.poll_only_when_pending is not None:
+        account.poll_only_when_pending = payload.poll_only_when_pending
+    after = {
+        "polling_enabled": account.polling_enabled,
+        "poll_only_when_pending": account.poll_only_when_pending,
+    }
+    if before == after:
         return BankAccountRead.model_validate(account, from_attributes=True)
-
-    account.polling_enabled = payload.polling_enabled
-    if payload.polling_enabled:
-        # Reset trạng thái lỗi cũ để worker khởi động sạch sẽ.
-        account.last_error = None
-        account.polling_status = "idle"
     await record_audit(
         session,
         actor=user.id,
-        action="bank.resume" if payload.polling_enabled else "bank.pause",
+        action="bank.polling_settings_update",
         target_type="bank_account",
         target_id=account.id,
         ip=request.client.host if request.client else None,
+        before=before,
+        after=after,
     )
     await session.commit()
-    # Báo worker rescan để cancel task cũ (pause) hoặc start task mới (resume).
     try:
         from packages.infra_pubsub import publish
 
         await publish("bank:account:added", account.id)
     except Exception:  # noqa: BLE001, S110
         pass
+    await poll_kick.kick(account.id)
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 

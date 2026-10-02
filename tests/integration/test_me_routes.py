@@ -118,7 +118,16 @@ async def test_create_list_delete_bank_account(client: httpx.AsyncClient) -> Non
         headers=_csrf(client),
     )
     assert res.status_code == 201, res.text
+    assert res.json()["poll_only_when_pending"] is True
     bank_id = res.json()["id"]
+    update = await client.patch(
+        f"/api/v1/me/bank-accounts/{bank_id}",
+        json={"poll_only_when_pending": False},
+        headers=_csrf(client),
+    )
+    assert update.status_code == 200, update.text
+    assert update.json()["poll_only_when_pending"] is False
+    assert update.json()["polling_enabled"] is True
     # list
     items = await client.get("/api/v1/me/bank-accounts")
     assert items.status_code == 200
@@ -150,6 +159,12 @@ async def test_bank_account_isolation_between_users(client: httpx.AsyncClient) -
     await _register_login(client, "b@b.com")
     items = await client.get("/api/v1/me/bank-accounts")
     assert all(b["id"] != other_bank for b in items.json())
+    update = await client.patch(
+        f"/api/v1/me/bank-accounts/{other_bank}",
+        json={"poll_only_when_pending": False},
+        headers=_csrf(client),
+    )
+    assert update.status_code == 404
     delete = await client.delete(
         f"/api/v1/me/bank-accounts/{other_bank}", headers=_csrf(client)
     )

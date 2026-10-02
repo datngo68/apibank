@@ -58,6 +58,7 @@ class BankAccount(Base):
     last_login_at: Mapped[datetime | None]
     last_poll_at: Mapped[datetime | None]
     polling_enabled: Mapped[bool] = mapped_column(default=True)
+    poll_only_when_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     polling_status: Mapped[str] = mapped_column(String(16), default="idle")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     verified_at: Mapped[datetime | None]

@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from redis.asyncio import Redis
-from sqlalchemy import update
+from sqlalchemy import exists, select, update
 
 from packages.banks import poll_kick
 from packages.banks.base import BankAdapter, BankAuthError, BankRateLimited
@@ -24,7 +24,7 @@ from packages.banks.registry import (
 from packages.config import runtime as config_runtime
 from packages.config.settings import get_settings
 from packages.core.ingest import ingest_transaction
-from packages.db.models import BankAccount
+from packages.db.models import BankAccount, Order
 from packages.db.session import get_sessionmaker
 from packages.infra_lock import redis_lock
 from packages.obs import metrics
@@ -169,6 +169,34 @@ async def _notify_bank_login_failed(
         )
 
 
+async def _has_active_pending_order(bank_account_id: str, now: datetime) -> bool:
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        statement = select(
+            exists().where(
+                Order.bank_account_id == bank_account_id,
+                Order.status == "pending",
+                Order.expired_at > now,
+            )
+        )
+        return bool((await session.scalar(statement)) or False)
+
+
+async def _should_poll(account: BankAccount, now: datetime) -> bool:
+    policy = account.poll_only_when_pending
+    if isinstance(account, BankAccount):
+        sessionmaker = get_sessionmaker()
+        async with sessionmaker() as session:
+            current_policy = await session.scalar(
+                select(BankAccount.poll_only_when_pending).where(BankAccount.id == account.id)
+            )
+        if current_policy is not None:
+            policy = bool(current_policy)
+    if not policy:
+        return True
+    return await _has_active_pending_order(account.id, now)
+
+
 async def _save_bank_session(
     *, bank_account_id: str, session_enc: str | None
 ) -> None:
@@ -199,6 +227,22 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
     )
     if restored_session:
         logger.info("bank_session_restored", extra={"bank_account_id": account.id})
+
+    kick_event = poll_kick.register(account.id)
+    # Pending-only accounts remain idle without calling MB until an active order exists.
+    while (
+        not shutdown_event.is_set()
+        and account.poll_only_when_pending
+        and not await _should_poll(account, datetime.now(UTC))
+    ):
+        await _update_account_status(
+            bank_account_id=account.id,
+            polling_status="waiting_order",
+            last_error=None,
+        )
+        kick_event.clear()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(kick_event.wait(), timeout=settings.poll_interval)
 
     # Re-login với backoff thay vì exit task; nếu MB rớt session/captcha OCR
     # fail, task vẫn sống và tự thử lại — không cần restart server.
@@ -238,9 +282,20 @@ async def _poll_account(account: BankAccount, *, redis: Redis | None) -> None:
                 continue
 
     sessionmaker = get_sessionmaker()
-    kick_event = poll_kick.register(account.id)
     try:
         while not shutdown_event.is_set():
+            if not await _should_poll(account, datetime.now(UTC)):
+                await _update_account_status(
+                    bank_account_id=account.id,
+                    polling_status="waiting_order",
+                    last_error=None,
+                )
+                kick_event.clear()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        kick_event.wait(), timeout=settings.poll_interval
+                    )
+                continue
             try:
                 async with sessionmaker() as session:
                     cursor = await load_cursor(session, bank_account_id=account.id)
