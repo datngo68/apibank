@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.db.models import BankAccount, Order, User
+from packages.db.models import BankAccount, Order, User, normalize_order_code
 from packages.db.session import get_session, get_sessionmaker
 from packages.infra_pubsub import subscribe, wait_for_message
 from packages.security.user_auth import current_user
@@ -47,7 +47,7 @@ async def topup_events(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
-    code = code.upper()
+    code = normalize_order_code(code)
     order = (
         await session.scalars(select(Order).where(Order.code == code))
     ).first()

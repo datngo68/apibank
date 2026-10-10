@@ -3,11 +3,14 @@ from decimal import Decimal
 from packages.db.models import Order, WebhookAttempt
 
 
-def test_order_code_has_dh_prefix_and_uppercase() -> None:
+def test_order_code_has_uppercase_full_name_and_lowercase_suffix() -> None:
     order = Order.new(amount_vnd=Decimal("100000"), bank_account_id="ba_1", ttl_seconds=900)
 
-    assert order.code.startswith("DH")
-    assert order.code.isupper()
+    name, suffix = order.code.rsplit(" chuyen tien", 1)
+    assert suffix == ""
+    assert name.isupper() and name.isascii()
+    assert len(name.split()) == 3
+    assert len(order.code) <= 96
     assert order.status == "pending"
 
 

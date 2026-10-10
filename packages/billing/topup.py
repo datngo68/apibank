@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.billing import wallet
 from packages.billing.errors import SystemBankNotConfiguredError
-from packages.db.models import BankAccount, Order, User, utcnow
+from packages.db.models import BankAccount, Order, User, allocate_order, utcnow
 
 TOPUP_KIND: Final = "topup"
 TOPUP_TTL_SECONDS: Final = 24 * 60 * 60  # 24h
@@ -60,9 +60,7 @@ async def create_topup_order(
         metadata_json={"kind": TOPUP_KIND, "user_id": user.id},
         user_id=user.id,
     )
-    session.add(order)
-    await session.flush()
-    return order
+    return await allocate_order(session, order)
 
 
 def is_topup_order(order: Order) -> bool:

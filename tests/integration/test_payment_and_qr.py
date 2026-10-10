@@ -75,6 +75,9 @@ async def test_payment_page_renders_html(monkeypatch, tmp_path) -> None:
     with TestClient(app) as client:
         page = client.get(f"/pay/{code}")
         status_resp = client.get(f"/pay/{code}/status")
+        normalized_resp = client.get(f"/pay/{code.lower().replace(' ', '  ')}/status")
+    assert normalized_resp.status_code == 200
+    assert normalized_resp.json()["code"] == code
     assert page.status_code == 200
     assert "Thanh toán đơn" in page.text
     assert "/qr/" in page.text

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.db.models import Order, Transaction, Webhook
+from packages.db.models import Order, Transaction, Webhook, allocate_order
 from packages.schemas.orders import OrderCreate
 from packages.schemas.webhooks import WebhookCreate
 
@@ -27,7 +27,7 @@ class OrderRepository:
             customer_ref=payload.customer_ref,
             metadata_json=payload.metadata,
         )
-        self._session.add(order)
+        await allocate_order(self._session, order)
         await self._session.commit()
         await self._session.refresh(order)
         from packages.banks import poll_kick

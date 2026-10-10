@@ -35,7 +35,7 @@
       const banner = document.getElementById("status-banner");
       async function poll() {
         try {
-          const response = await fetch(`/pay/${code}/status`, { cache: "no-store" });
+          const response = await fetch(`/pay/${encodeURIComponent(code)}/status`, { cache: "no-store" });
           if (!response.ok) return;
           const data = await response.json();
           if (data.status === "paid") {

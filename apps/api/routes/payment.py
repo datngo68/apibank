@@ -8,7 +8,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.db.models import BankAccount, Order
+from packages.db.models import BankAccount, Order, normalize_order_code
 from packages.db.session import get_session
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -22,7 +22,7 @@ async def payment_page(
     code: str, request: Request, session: AsyncSession = Depends(get_session)
 ) -> HTMLResponse:
     order = (
-        await session.scalars(select(Order).where(Order.code == code.upper()))
+        await session.scalars(select(Order).where(Order.code == normalize_order_code(code)))
     ).first()
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -39,7 +39,7 @@ async def payment_status(
     code: str, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     order = (
-        await session.scalars(select(Order).where(Order.code == code.upper()))
+        await session.scalars(select(Order).where(Order.code == normalize_order_code(code)))
     ).first()
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")

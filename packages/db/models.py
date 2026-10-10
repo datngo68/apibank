@@ -18,7 +18,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    select,
 )
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -71,7 +74,7 @@ class Order(Base):
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"ord_{secrets.token_urlsafe(16)}"
     )
-    code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(96), unique=True, index=True)
     amount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
@@ -119,6 +122,22 @@ class Order(Base):
             metadata_json=metadata_json or {},
             expired_at=utcnow() + timedelta(seconds=ttl_seconds),
         )
+
+
+async def allocate_order(session: AsyncSession, order: Order) -> Order:
+    # ponytail: names stay unique for retained orders; reuse needs ID-based URLs
+    # and reliable bank timestamps before a cooldown can safely be introduced.
+    for _ in range(128):
+        try:
+            async with session.begin_nested():
+                session.add(order)
+                await session.flush()
+            return order
+        except IntegrityError:
+            if not await session.scalar(select(Order.id).where(Order.code == order.code)):
+                raise
+            order.code = _generate_order_code()
+    raise ValueError("Unable to allocate a unique payment name; retry later")
 
 
 class Transaction(Base):
@@ -1052,6 +1071,26 @@ class TicketMessage(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
 
 
+def normalize_order_code(value: str) -> str:
+    value = " ".join(value.split()).upper()
+    if value.endswith(" CHUYEN TIEN"):
+        return value[:-12] + " chuyen tien"
+    return value
+
+
 def _generate_order_code() -> str:
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return "DH" + "".join(secrets.choice(alphabet) for _ in range(6))
+    surnames = [
+        "NGUYEN", "TRAN", "LE", "PHAM", "HOANG", "HUYNH", "PHAN", "VU", "VO", "DANG",
+        "BUI", "DO", "HO", "NGO", "DUONG", "LY", "DINH", "TRINH", "MA", "CAO", "LUONG",
+        "LUU", "TRUONG", "TA", "DAO", "LAM", "CHAU", "TO", "LA", "QUACH",
+    ]
+    middles = [
+        "VAN", "THI", "TIEN", "MINH", "QUANG", "DUC", "HUU", "NGOC", "THANH", "HOANG",
+        "GIA", "BAO", "TUAN", "HAI", "XUAN", "NHAT", "TRUNG", "KIM", "ANH", "KHANH",
+    ]
+    names = [
+        "DAT", "AN", "BINH", "CUONG", "DUNG", "DUY", "GIANG", "HIEU", "HOA", "HUNG", "HUY",
+        "KHANG", "KHOA", "KIEN", "LINH", "LONG", "NAM", "PHONG", "PHUC", "QUAN", "QUYNH",
+        "SON", "TAM", "THAO", "THIEN", "THINH", "TRANG", "TRIEU", "VINH", "YEN",
+    ]
+    return " ".join(secrets.choice(parts) for parts in (surnames, middles, names)) + " chuyen tien"
