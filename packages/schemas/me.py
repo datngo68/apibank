@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl
 
 # -- Bank accounts ----------------------------------------------------------
 
@@ -254,7 +254,7 @@ class OrderListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    code: str
+    code: str = Field(validation_alias=AliasChoices("public_code", "code"))
     amount_vnd: Decimal
     status: str
     bank_account_id: str

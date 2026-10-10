@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OrderCreate(BaseModel):
@@ -20,6 +20,7 @@ class OrderRead(BaseModel):
     id: str
     code: str
     transfer_content: str | None = None
+    pay_url: str | None = None
     amount_vnd: Decimal
     status: str
     bank_account_id: str
@@ -30,3 +31,10 @@ class OrderRead(BaseModel):
     metadata_json: dict[str, Any]
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def restore_public_code(self) -> "OrderRead":
+        # Keep the unique payment URL before exposing the reusable transfer name.
+        self.pay_url = self.pay_url or f"/pay/{self.code}"
+        self.code = self.transfer_content or self.code
+        return self

@@ -100,6 +100,10 @@ class Order(Base):
         "Transaction", foreign_keys="Order.paid_tx_id", post_update=True
     )
 
+    @property
+    def public_code(self) -> str:
+        return self.transfer_content or self.code
+
     @classmethod
     def new(
         cls,

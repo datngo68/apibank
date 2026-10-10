@@ -215,7 +215,7 @@ async def _try_match_transaction(
 
         paid_event = {
             "order_id": order.id,
-            "code": order.code,
+            "code": order.public_code,
             "amount_vnd": int(order.amount_vnd),
             "bank_ref_no": transaction.bank_ref_no,
         }
@@ -267,7 +267,7 @@ async def _notify_topup_credited(
             body=(f"Đơn {order.code} đã được ghi nhận: +{int(order.amount_vnd):,} VND."),
             payload={
                 "order_id": order.id,
-                "code": order.code,
+                "code": order.public_code,
                 "amount_vnd": int(order.amount_vnd),
                 "bank_ref_no": transaction.bank_ref_no,
             },
@@ -308,7 +308,7 @@ def _build_payload(order: Order, transaction: Transaction) -> dict[str, Any]:
             # Flat keys — preferred shape for integrators (matches docs).
             "order_id": order.id,
             "transaction_id": transaction.id,
-            "code": order.code,
+            "code": order.public_code,
             "amount_vnd": int(order.amount_vnd),
             "bank_ref_no": transaction.bank_ref_no,
             "posted_at": posted_at_iso,
@@ -318,7 +318,7 @@ def _build_payload(order: Order, transaction: Transaction) -> dict[str, Any]:
             # that read `data.order.code` / `data.transaction.ref`.
             "order": {
                 "id": order.id,
-                "code": order.code,
+                "code": order.public_code,
                 "amount": int(order.amount_vnd),
                 "amount_vnd": int(order.amount_vnd),
                 "status": order.status,
