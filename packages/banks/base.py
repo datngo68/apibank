@@ -34,6 +34,7 @@ class BankTransaction:
     counter_account: str | None
     counter_name: str | None
     raw: dict[str, Any]
+    timestamp_reliable: bool = False
 
     def __post_init__(self) -> None:
         if self.amount == 0:

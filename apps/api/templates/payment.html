@@ -18,7 +18,7 @@
 
       <dl class="text-sm text-slate-700 space-y-1">
         <div class="flex justify-between"><dt>Số tiền</dt><dd class="font-semibold">{{ "{:,.0f}".format(order.amount_vnd) }} đ</dd></div>
-        <div class="flex justify-between"><dt>Nội dung</dt><dd class="font-mono">{{ order.code }}</dd></div>
+        <div class="flex justify-between"><dt>Nội dung</dt><dd class="font-mono">{{ order.transfer_content or order.code }}</dd></div>
         {% if bank_account %}
         <div class="flex justify-between"><dt>Ngân hàng</dt><dd>{{ bank_account.bank_code }}</dd></div>
         <div class="flex justify-between"><dt>Số tài khoản</dt><dd class="font-mono">{{ bank_account.account_no }}</dd></div>

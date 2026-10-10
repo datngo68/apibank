@@ -37,6 +37,7 @@ async def test_ingest_unmatched_transaction_persists_state_unmatched() -> None:
             counter_account=None,
             counter_name=None,
             raw={},
+            timestamp_reliable=True,
         )
 
         result = await ingest_transaction(session, bank_account_id="ba_1", bank_transaction=bank_tx)
@@ -68,10 +69,11 @@ async def test_ingest_matching_order_marks_paid_and_enqueues_webhook() -> None:
             bank_ref_no="FT002",
             posted_at=datetime.now(UTC),
             amount=Decimal("150000"),
-            content=f"NAP TIEN {order.code}",
+            content=f"NAP TIEN {order.transfer_content}",
             counter_account=None,
             counter_name=None,
             raw={},
+            timestamp_reliable=True,
         )
 
         result = await ingest_transaction(session, bank_account_id="ba_1", bank_transaction=bank_tx)

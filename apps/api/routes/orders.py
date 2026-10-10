@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.db.models import ApiKey, BankAccount
+from packages.db.models import ApiKey, BankAccount, PaymentNamePoolFull
 from packages.db.repositories import OrderRepository
 from packages.db.session import get_session
 from packages.schemas.orders import OrderCreate, OrderRead
@@ -65,7 +65,10 @@ async def create_order(
         return OrderRead.model_validate(existing.response_json)
 
     repo = OrderRepository(session)
-    order = await repo.create_order(payload, idempotency_key=idempotency_key)
+    try:
+        order = await repo.create_order(payload, idempotency_key=idempotency_key)
+    except PaymentNamePoolFull as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     body = OrderRead.model_validate(order)
     session.add(
         build_idempotency_record(

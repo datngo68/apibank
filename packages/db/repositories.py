@@ -45,6 +45,16 @@ class OrderRepository:
         if order.status == "pending":
             order.status = "canceled"
             order.updated_at = datetime.now(UTC)
+            from datetime import timedelta
+
+            from packages.db.models import PaymentNameReservation
+
+            reservation = await self._session.get(
+                PaymentNameReservation,
+                (order.bank_account_id, order.transfer_content or order.code),
+            )
+            if reservation is not None:
+                reservation.reserved_until = order.updated_at + timedelta(days=7)
             await self._session.commit()
             await self._session.refresh(order)
         return order

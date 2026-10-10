@@ -78,11 +78,12 @@ async def test_ingest_credits_wallet_for_topup(initialized_db: AsyncSession) -> 
     bank_tx = BankTransaction(
         bank_ref_no="REF-001",
         amount=Decimal(100_000),
-        content=f"NAP TIEN {order.code}",
+        content=f"NAP TIEN {order.transfer_content}",
         posted_at=datetime.now(UTC),
         counter_account=None,
         counter_name=None,
         raw={"src": "test"},
+        timestamp_reliable=True,
     )
     await ingest_transaction(initialized_db, bank_account_id=bank.id, bank_transaction=bank_tx)
 
@@ -103,11 +104,12 @@ async def test_topup_credit_idempotent(initialized_db: AsyncSession) -> None:
     tx1 = BankTransaction(
         bank_ref_no="A",
         amount=Decimal(80_000),
-        content=order.code,
+        content=order.transfer_content,
         posted_at=datetime.now(UTC),
         counter_account=None,
         counter_name=None,
         raw={},
+        timestamp_reliable=True,
     )
     await ingest_transaction(initialized_db, bank_account_id=bank.id, bank_transaction=tx1)
     refreshed = await initialized_db.get(User, user.id)
@@ -144,11 +146,12 @@ async def test_non_topup_order_not_credited(initialized_db: AsyncSession) -> Non
     bank_tx = BankTransaction(
         bank_ref_no="X",
         amount=Decimal(50_000),
-        content=order.code,
+        content=order.transfer_content,
         posted_at=datetime.now(UTC),
         counter_account=None,
         counter_name=None,
         raw={},
+        timestamp_reliable=True,
     )
     await ingest_transaction(initialized_db, bank_account_id=bank.id, bank_transaction=bank_tx)
     refreshed = await initialized_db.get(User, user.id)
@@ -177,11 +180,12 @@ async def test_wallet_consistency_after_multiple_topups(initialized_db: AsyncSes
         bank_tx = BankTransaction(
             bank_ref_no=f"R{i}",
             amount=Decimal(order.amount_vnd),
-            content=order.code,
+            content=order.transfer_content,
             posted_at=datetime.now(UTC),
             counter_account=None,
             counter_name=None,
             raw={},
+        timestamp_reliable=True,
         )
         await ingest_transaction(
             initialized_db, bank_account_id=bank.id, bank_transaction=bank_tx

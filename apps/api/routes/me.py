@@ -42,6 +42,7 @@ from packages.db.models import (
     Notification,
     NotificationPreference,
     Order,
+    PaymentNamePoolFull,
     Plan,
     Transaction,
     User,
@@ -203,9 +204,7 @@ async def create_bank_account(
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
-@router.post(
-    "/bank-accounts/{bank_account_id}/verify", response_model=BankAccountRead
-)
+@router.post("/bank-accounts/{bank_account_id}/verify", response_model=BankAccountRead)
 async def verify_bank_account(
     bank_account_id: str,
     request: Request,
@@ -229,9 +228,7 @@ async def verify_bank_account(
     account = await _get_user_bank(session, user, bank_account_id)
     try:
         username, password = decode_credentials(account, cipher=cipher)
-        adapter = build_adapter(
-            bank_code=account.bank_code, username=username, password=password
-        )
+        adapter = build_adapter(bank_code=account.bank_code, username=username, password=password)
         restore_adapter_session(adapter, account.session_enc, cipher=cipher)
         await adapter.login()
         session_enc = serialize_adapter_session(adapter, cipher=cipher)
@@ -295,9 +292,7 @@ async def verify_bank_account(
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
-@router.patch(
-    "/bank-accounts/{bank_account_id}", response_model=BankAccountRead
-)
+@router.patch("/bank-accounts/{bank_account_id}", response_model=BankAccountRead)
 async def update_bank_account(
     bank_account_id: str,
     payload: BankAccountUpdate,
@@ -357,9 +352,7 @@ async def update_bank_account(
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
-@router.post(
-    "/bank-accounts/{bank_account_id}/rotate", response_model=BankAccountRead
-)
+@router.post("/bank-accounts/{bank_account_id}/rotate", response_model=BankAccountRead)
 async def rotate_bank_credentials(
     bank_account_id: str,
     payload: BankAccountRotate,
@@ -392,9 +385,7 @@ async def rotate_bank_credentials(
     return BankAccountRead.model_validate(account, from_attributes=True)
 
 
-@router.delete(
-    "/bank-accounts/{bank_account_id}", response_model=GenericMessage
-)
+@router.delete("/bank-accounts/{bank_account_id}", response_model=GenericMessage)
 async def delete_bank_account(
     bank_account_id: str,
     request: Request,
@@ -435,9 +426,7 @@ async def delete_bank_account(
     return GenericMessage(message="deleted")
 
 
-async def _get_user_bank(
-    session: AsyncSession, user: User, bank_id: str
-) -> BankAccount:
+async def _get_user_bank(session: AsyncSession, user: User, bank_id: str) -> BankAccount:
     account = await session.get(BankAccount, bank_id)
     if account is None or account.user_id != user.id or account.status == "deleted":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -676,9 +665,7 @@ async def send_test_ping(
     }
 
 
-async def _get_user_webhook(
-    session: AsyncSession, user: User, webhook_id: str
-) -> Webhook:
+async def _get_user_webhook(session: AsyncSession, user: User, webhook_id: str) -> Webhook:
     webhook = await session.get(Webhook, webhook_id)
     if webhook is None or webhook.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
@@ -707,9 +694,7 @@ async def list_api_keys(
     rows = list(
         (
             await session.scalars(
-                select(ApiKey)
-                .where(ApiKey.user_id == user.id)
-                .order_by(ApiKey.created_at.desc())
+                select(ApiKey).where(ApiKey.user_id == user.id).order_by(ApiKey.created_at.desc())
             )
         ).all()
     )
@@ -786,9 +771,7 @@ async def get_wallet(
         select(func.count())
         .select_from(Order)
         .where(Order.status == "pending")
-        .where(
-            (Order.user_id == user.id) | (Order.customer_ref == user.email)
-        )
+        .where((Order.user_id == user.id) | (Order.customer_ref == user.email))
     )
     return WalletBalanceRead(
         balance_vnd=Decimal(user.balance_vnd),
@@ -817,6 +800,8 @@ async def create_topup(
         order = await topup_pkg.create_topup_order(
             session, user=user, amount_vnd=payload.amount_vnd
         )
+    except PaymentNamePoolFull as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SystemBankNotConfiguredError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
@@ -842,7 +827,7 @@ async def create_topup(
             bank_code=bank_code,
             account_no=bank.account_no,
             amount_vnd=int(order.amount_vnd),
-            content=order.code,
+            content=order.transfer_content or order.code,
             account_holder=bank.account_holder,
         )
         if bank
@@ -860,7 +845,7 @@ async def create_topup(
         bank_name=bank_name,
         account_no=bank.account_no if bank else "",
         account_holder=bank.account_holder if bank else "",
-        transfer_content=order.code,
+        transfer_content=order.transfer_content or order.code,
     )
 
 
@@ -872,7 +857,7 @@ def _topup_list_item(order: Order, bank: BankAccount | None) -> TopupListItem:
             bank_code=bank_code,
             account_no=bank.account_no,
             amount_vnd=int(order.amount_vnd),
-            content=order.code,
+            content=order.transfer_content or order.code,
             account_holder=bank.account_holder,
         )
         if bank
@@ -891,7 +876,7 @@ def _topup_list_item(order: Order, bank: BankAccount | None) -> TopupListItem:
         bank_name=bank_name,
         account_no=bank.account_no if bank else "",
         account_holder=bank.account_holder if bank else "",
-        transfer_content=order.code,
+        transfer_content=order.transfer_content or order.code,
     )
 
 
@@ -907,10 +892,7 @@ async def list_pending_topups(
             await session.scalars(
                 select(Order)
                 .where(Order.status == "pending")
-                .where(
-                    (Order.user_id == user.id)
-                    | (Order.customer_ref == user.email)
-                )
+                .where((Order.user_id == user.id) | (Order.customer_ref == user.email))
                 .order_by(desc(Order.created_at))
                 .limit(20)
             )
@@ -919,9 +901,7 @@ async def list_pending_topups(
     if not rows:
         return []
     bank_ids = {o.bank_account_id for o in rows}
-    banks_result = await session.scalars(
-        select(BankAccount).where(BankAccount.id.in_(bank_ids))
-    )
+    banks_result = await session.scalars(select(BankAccount).where(BankAccount.id.in_(bank_ids)))
     banks = {b.id: b for b in banks_result.all()}
     out: list[TopupListItem] = []
     for order in rows:
@@ -1036,8 +1016,7 @@ async def check_pending_topup(
             status=initial_status,
             waited_ms=0,
             message=(
-                "Đơn nạp đã hết hạn." if initial_status == "expired"
-                else "Đơn nạp đã bị huỷ."
+                "Đơn nạp đã hết hạn." if initial_status == "expired" else "Đơn nạp đã bị huỷ."
             ),
         )
 
@@ -1114,9 +1093,7 @@ async def list_plans(
     rows = list(
         (
             await session.scalars(
-                select(Plan)
-                .where(Plan.active.is_(True))
-                .order_by(Plan.sort_order, Plan.price_vnd)
+                select(Plan).where(Plan.active.is_(True)).order_by(Plan.sort_order, Plan.price_vnd)
             )
         ).all()
     )
@@ -1229,9 +1206,7 @@ async def my_invoices(
     rows = list(
         (
             await session.scalars(
-                select(Invoice)
-                .where(Invoice.user_id == user.id)
-                .order_by(Invoice.issued_at.desc())
+                select(Invoice).where(Invoice.user_id == user.id).order_by(Invoice.issued_at.desc())
             )
         ).all()
     )
@@ -1252,11 +1227,7 @@ async def list_my_orders(
     session: AsyncSession = Depends(get_session),
 ) -> list[OrderListItem]:
     user_bank_ids = list(
-        (
-            await session.scalars(
-                select(BankAccount.id).where(BankAccount.user_id == user.id)
-            )
-        ).all()
+        (await session.scalars(select(BankAccount.id).where(BankAccount.user_id == user.id))).all()
     )
     if not user_bank_ids:
         return []
@@ -1283,11 +1254,7 @@ async def list_my_transactions(
     session: AsyncSession = Depends(get_session),
 ) -> list[TransactionListItem]:
     user_bank_ids = list(
-        (
-            await session.scalars(
-                select(BankAccount.id).where(BankAccount.user_id == user.id)
-            )
-        ).all()
+        (await session.scalars(select(BankAccount.id).where(BankAccount.user_id == user.id))).all()
     )
     if not user_bank_ids:
         return []
@@ -1400,24 +1367,18 @@ async def list_notification_preferences(
     rows = list(
         (
             await session.scalars(
-                select(NotificationPreference).where(
-                    NotificationPreference.user_id == user.id
-                )
+                select(NotificationPreference).where(NotificationPreference.user_id == user.id)
             )
         ).all()
     )
-    overrides: dict[tuple[str, str], bool] = {
-        (r.kind, r.channel): r.enabled for r in rows
-    }
+    overrides: dict[tuple[str, str], bool] = {(r.kind, r.channel): r.enabled for r in rows}
 
     items: list[NotificationPreferenceItem] = []
     for kind, default_channels in DEFAULT_CHANNELS.items():
         for channel in VALID_NOTIFICATION_CHANNELS:
             key = (kind, channel)
             enabled = overrides.get(key, channel in default_channels)
-            items.append(
-                NotificationPreferenceItem(kind=kind, channel=channel, enabled=enabled)
-            )
+            items.append(NotificationPreferenceItem(kind=kind, channel=channel, enabled=enabled))
     return NotificationPreferenceList(items=items)
 
 
@@ -1447,9 +1408,7 @@ async def update_notification_preferences(
     existing = list(
         (
             await session.scalars(
-                select(NotificationPreference).where(
-                    NotificationPreference.user_id == user.id
-                )
+                select(NotificationPreference).where(NotificationPreference.user_id == user.id)
             )
         ).all()
     )

@@ -46,6 +46,7 @@ async def ingest_transaction(
             amount_vnd=bank_transaction.amount,
             content=bank_transaction.content,
             posted_at=bank_transaction.posted_at,
+            timestamp_reliable=bank_transaction.timestamp_reliable,
             raw_json=bank_transaction.raw,
             state="new",
         )
@@ -55,9 +56,7 @@ async def ingest_transaction(
         paid_event: dict[str, Any] | None = None
         enqueued_webhook = False
         if bank_transaction.amount > 0:
-            paid_event, enqueued_webhook = await _try_match_transaction(
-                session, transaction
-            )
+            paid_event, enqueued_webhook = await _try_match_transaction(session, transaction)
 
         await session.commit()
     await session.refresh(transaction)
@@ -69,9 +68,7 @@ async def ingest_transaction(
     return transaction
 
 
-async def _publish_post_commit(
-    *, paid_event: dict[str, Any] | None, kick_webhook: bool
-) -> None:
+async def _publish_post_commit(*, paid_event: dict[str, Any] | None, kick_webhook: bool) -> None:
     """Publish Redis events sau khi commit DB.
 
     Tách hàm riêng để mock trong test + cô lập import (lười load redis).
@@ -135,12 +132,29 @@ async def _try_match_transaction(
         )
     ).all()
 
+    # ponytail: an old QR paid after reuse can match the new order; longer names
+    # or a unique bank reference are needed if that accepted risk becomes unacceptable.
+    from datetime import UTC
+
+    def aware(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+    candidates = [
+        o
+        for o in candidates
+        if o.transfer_content is None
+        or (
+            transaction.timestamp_reliable
+            and aware(o.created_at) <= aware(transaction.posted_at) < aware(o.expired_at)
+        )
+    ]
+
     match = find_order_match(
         MatchInput(amount=transaction.amount_vnd, content=transaction.content),
         [
             MatchCandidate(
                 id=order.id,
-                code=order.code,
+                code=order.transfer_content or order.code,
                 amount=order.amount_vnd,
                 status=cast(OrderStatus, order.status),
                 expired_at=order.expired_at,
@@ -158,6 +172,15 @@ async def _try_match_transaction(
         order.status = transition_order(order.status, "paid")
         order.paid_tx_id = transaction.id
         order.paid_at = utcnow()
+        from datetime import timedelta
+
+        from packages.db.models import PaymentNameReservation
+
+        reservation = await session.get(
+            PaymentNameReservation, (order.bank_account_id, order.transfer_content or order.code)
+        )
+        if reservation is not None:
+            reservation.reserved_until = order.paid_at + timedelta(days=7)
         order.updated_at = utcnow()
         transaction.matched_order_id = order.id
         transaction.state = "matched"
@@ -181,16 +204,12 @@ async def _try_match_transaction(
 
             if is_topup_order(order):
                 await credit_wallet_for_topup(session, order)
-                await _notify_topup_credited(
-                    session, order=order, transaction=transaction
-                )
+                await _notify_topup_credited(session, order=order, transaction=transaction)
         except Exception:  # noqa: BLE001
             # Không chặn flow ingest; lỗi credit sẽ retry ở batch reconcile.
             logger.exception("topup_credit_failed", extra={"order": order.id})
 
-        webhook_count = await _enqueue_webhook(
-            session, order=order, transaction=transaction
-        )
+        webhook_count = await _enqueue_webhook(session, order=order, transaction=transaction)
         enqueued_webhook = webhook_count > 0
         metrics.orders_total.labels(status="paid").inc()
 
@@ -245,10 +264,7 @@ async def _notify_topup_credited(
             user=user,
             kind="topup_credited",
             title="Nạp ví thành công",
-            body=(
-                f"Đơn {order.code} đã được ghi nhận: "
-                f"+{int(order.amount_vnd):,} VND."
-            ),
+            body=(f"Đơn {order.code} đã được ghi nhận: +{int(order.amount_vnd):,} VND."),
             payload={
                 "order_id": order.id,
                 "code": order.code,
@@ -257,18 +273,12 @@ async def _notify_topup_credited(
             },
         )
     except Exception:  # noqa: BLE001
-        logger.exception(
-            "notify_topup_credited_failed", extra={"order": order.id}
-        )
+        logger.exception("notify_topup_credited_failed", extra={"order": order.id})
 
 
-async def _enqueue_webhook(
-    session: AsyncSession, *, order: Order, transaction: Transaction
-) -> int:
+async def _enqueue_webhook(session: AsyncSession, *, order: Order, transaction: Transaction) -> int:
     """Insert 1 WebhookAttempt cho mỗi webhook active. Trả số lượng đã enqueue."""
-    webhooks = list(
-        (await session.scalars(select(Webhook).where(Webhook.active.is_(True)))).all()
-    )
+    webhooks = list((await session.scalars(select(Webhook).where(Webhook.active.is_(True)))).all())
     for webhook in webhooks:
         attempt = WebhookAttempt.new(
             webhook_id=webhook.id,

@@ -94,9 +94,7 @@ class MBAdapter:
             else start.replace(tzinfo=UTC).astimezone(_VN_TZ)
         )
         end_vn = (
-            end.astimezone(_VN_TZ)
-            if end.tzinfo
-            else end.replace(tzinfo=UTC).astimezone(_VN_TZ)
+            end.astimezone(_VN_TZ) if end.tzinfo else end.replace(tzinfo=UTC).astimezone(_VN_TZ)
         )
         result = await client.getTransactionAccountHistory(
             accountNo=account_no, from_date=start_vn, to_date=end_vn
@@ -132,16 +130,19 @@ class MBAdapter:
             amount=amount,
             content=str(raw.get("description") or raw.get("content") or ""),
             counter_account=_optional_str(
-                raw.get("benAccountNo")
-                or raw.get("counterAccount")
-                or raw.get("toAccountNumber")
+                raw.get("benAccountNo") or raw.get("counterAccount") or raw.get("toAccountNumber")
             ),
             counter_name=_optional_str(
-                raw.get("benAccountName")
-                or raw.get("counterName")
-                or raw.get("toAccountName")
+                raw.get("benAccountName") or raw.get("counterName") or raw.get("toAccountName")
             ),
             raw=raw,
+            timestamp_reliable=_reliable_timestamp(
+                str(
+                    raw.get("transactionDate")
+                    or raw.get("postingDate")
+                    or raw.get("transactionTime")
+                )
+            ),
         )
 
 
@@ -162,12 +163,26 @@ def _parse_amount(value: Any) -> Decimal:
     return Decimal(normalized)
 
 
+def _reliable_timestamp(value: str) -> bool:
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d%m%Y%H%M%S"):
+        try:
+            datetime.strptime(value, fmt)
+            return True
+        except ValueError:
+            pass
+    try:
+        parsed = datetime.fromisoformat(value)
+        return "T" in value and parsed.tzinfo is not None
+    except ValueError:
+        return False
+
+
 def _parse_datetime(value: str) -> datetime:
     if not value:
         return datetime.now(UTC)
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%S", "%d%m%Y%H%M%S"):
         try:
-            return datetime.strptime(value, fmt).replace(tzinfo=UTC)
+            return datetime.strptime(value, fmt).replace(tzinfo=_VN_TZ).astimezone(UTC)
         except ValueError:
             continue
     try:

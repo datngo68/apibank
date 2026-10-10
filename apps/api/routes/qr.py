@@ -22,17 +22,13 @@ def _resolve_bin(bank_code: str) -> str | None:
 
 
 @router.get("/qr/{order_id}.png")
-async def order_qr_png(
-    order_id: str, session: AsyncSession = Depends(get_session)
-) -> Response:
+async def order_qr_png(order_id: str, session: AsyncSession = Depends(get_session)) -> Response:
     order = await session.get(Order, order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
     bank_account = await session.get(BankAccount, order.bank_account_id)
     if bank_account is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="bank account missing"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bank account missing")
 
     bin_code = _resolve_bin(bank_account.bank_code)
     if bin_code is None:
@@ -45,7 +41,7 @@ async def order_qr_png(
         bank_bin=bin_code,
         account_no=bank_account.account_no,
         amount_vnd=int(order.amount_vnd),
-        content=order.code,
+        content=order.transfer_content or order.code,
     )
     png = generate_qr_png(payload)
     return Response(

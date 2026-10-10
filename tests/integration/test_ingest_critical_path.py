@@ -81,11 +81,12 @@ async def test_ingest_does_not_call_telegram_synchronously(
     bank_tx = BankTransaction(
         bank_ref_no="REF-FAST-001",
         amount=Decimal(100_000),
-        content=f"NAP {order.code}",
+        content=f"NAP {order.transfer_content}",
         posted_at=datetime.now(UTC),
         counter_account=None,
         counter_name=None,
         raw={},
+        timestamp_reliable=True,
     )
     # Phải KHÔNG raise — ingest chỉ ghi outbox.
     await ingest_transaction(
@@ -117,11 +118,12 @@ async def test_ingest_writes_notification_outbox_rows(
     bank_tx = BankTransaction(
         bank_ref_no="REF-OUT-001",
         amount=Decimal(50_000),
-        content=order.code,
+        content=order.transfer_content,
         posted_at=datetime.now(UTC),
         counter_account=None,
         counter_name=None,
         raw={},
+        timestamp_reliable=True,
     )
     await ingest_transaction(
         initialized_db, bank_account_id=bank.id, bank_transaction=bank_tx

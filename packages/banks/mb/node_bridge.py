@@ -57,14 +57,13 @@ class MBNodeBridgeAdapter:
         if amount == 0:
             amount = -Decimal(str(raw.get("debitAmount") or 0))
         posted_text = raw.get("postedAt") or raw.get("transactionDate")
-        posted_at = (
-            datetime.fromisoformat(posted_text)
-            if posted_text and "T" in posted_text
-            else datetime.strptime(posted_text or "01/01/1970", "%d/%m/%Y")
-        )
+        from packages.banks.mb.adapter import _parse_datetime, _reliable_timestamp
+
+        posted_at = _parse_datetime(str(posted_text or ""))
         return BankTransaction(
             bank_ref_no=str(raw.get("refNo") or raw.get("transactionId")),
             posted_at=posted_at,
+            timestamp_reliable=_reliable_timestamp(str(posted_text or "")),
             amount=amount,
             content=str(raw.get("description") or raw.get("content") or ""),
             counter_account=raw.get("counterAccount"),

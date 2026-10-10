@@ -19,6 +19,7 @@ class OrderRead(BaseModel):
 
     id: str
     code: str
+    transfer_content: str | None = None
     amount_vnd: Decimal
     status: str
     bank_account_id: str

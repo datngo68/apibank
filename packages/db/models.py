@@ -75,6 +75,7 @@ class Order(Base):
         String(64), primary_key=True, default=lambda: f"ord_{secrets.token_urlsafe(16)}"
     )
     code: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    transfer_content: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
     amount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
@@ -112,7 +113,8 @@ class Order(Base):
         user_id: str | None = None,
     ) -> Order:
         return cls(
-            code=_generate_order_code(),
+            code=f"PAY{secrets.token_hex(16).upper()}",
+            transfer_content=_generate_order_code(),
             amount_vnd=amount_vnd,
             bank_account_id=bank_account_id,
             description=description,
@@ -124,20 +126,97 @@ class Order(Base):
         )
 
 
+class PaymentNameReservation(Base):
+    __tablename__ = "payment_name_reservations"
+
+    bank_account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content: Mapped[str] = mapped_column(String(96), primary_key=True)
+    reserved_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentNamePoolFull(ValueError):
+    pass
+
+
 async def allocate_order(session: AsyncSession, order: Order) -> Order:
-    # ponytail: names stay unique for retained orders; reuse needs ID-based URLs
-    # and reliable bank timestamps before a cooldown can safely be introduced.
-    for _ in range(128):
+    now = utcnow()
+    cooldown = timedelta(days=7)
+    reservations = dict(
+        (
+            await session.execute(
+                select(PaymentNameReservation.content, PaymentNameReservation.reserved_until).where(
+                    PaymentNameReservation.bank_account_id == order.bank_account_id
+                )
+            )
+        ).all()
+    )
+    # Legacy URLs keep their codes; protect their latest end per receiving account.
+    legacy = (
+        await session.scalars(
+            select(Order).where(
+                Order.bank_account_id == order.bank_account_id,
+                Order.transfer_content.is_(None),
+            )
+        )
+    ).all()
+    for previous in legacy:
+        if previous.code.endswith(" chuyen tien"):
+            end = previous.paid_at if previous.status == "paid" else None
+            until = (end or previous.expired_at).replace(tzinfo=UTC) + cooldown
+            current = reservations.get(previous.code)
+            if current is None or current.replace(tzinfo=UTC) < until:
+                reservations[previous.code] = until
+
+    def aware(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+    available = [
+        name
+        for name in _payment_names()
+        if name not in reservations or aware(reservations[name]) <= now
+    ]
+    secrets.SystemRandom().shuffle(available)
+    for content in available:
         try:
             async with session.begin_nested():
+                reservation = await session.get(
+                    PaymentNameReservation, (order.bank_account_id, content)
+                )
+                until = max(aware(order.expired_at), now) + cooldown
+                if reservation is None:
+                    session.add(
+                        PaymentNameReservation(
+                            bank_account_id=order.bank_account_id,
+                            content=content,
+                            reserved_until=until,
+                        )
+                    )
+                else:
+                    from sqlalchemy import update
+
+                    claimed = await session.execute(
+                        update(PaymentNameReservation)
+                        .where(
+                            PaymentNameReservation.bank_account_id == order.bank_account_id,
+                            PaymentNameReservation.content == content,
+                            PaymentNameReservation.reserved_until <= now,
+                        )
+                        .values(reserved_until=until)
+                        .execution_options(synchronize_session="fetch")
+                    )
+                    if claimed.rowcount != 1:
+                        continue
+                order.transfer_content = content
                 session.add(order)
                 await session.flush()
             return order
         except IntegrityError:
-            if not await session.scalar(select(Order.id).where(Order.code == order.code)):
+            # Never disguise an unrelated order identity/foreign-key failure as capacity.
+            if await session.scalar(select(Order.id).where(Order.code == order.code)):
                 raise
-            order.code = _generate_order_code()
-    raise ValueError("Unable to allocate a unique payment name; retry later")
+            if not await session.get(PaymentNameReservation, (order.bank_account_id, content)):
+                raise
+    raise PaymentNamePoolFull("Payment name pool is full; retry after cooldown")
 
 
 class Transaction(Base):
@@ -154,6 +233,7 @@ class Transaction(Base):
     amount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
     content: Mapped[str] = mapped_column(Text)
     posted_at: Mapped[datetime] = mapped_column(index=True)
+    timestamp_reliable: Mapped[bool] = mapped_column(Boolean, default=False)
     raw_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     matched_order_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("orders.id"), nullable=True
@@ -292,9 +372,7 @@ class AuditLog(Base):
 class PollCursor(Base):
     __tablename__ = "poll_cursors"
 
-    bank_account_id: Mapped[str] = mapped_column(
-        ForeignKey("bank_accounts.id"), primary_key=True
-    )
+    bank_account_id: Mapped[str] = mapped_column(ForeignKey("bank_accounts.id"), primary_key=True)
     last_seen_at: Mapped[datetime | None]
     last_ref_no: Mapped[str | None] = mapped_column(String(128))
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
@@ -318,9 +396,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), default="user", index=True)
     # Sub-role cho admin tier (super_admin|support|finance|read_only). NULL
     # = legacy: admin/owner mặc định 'super_admin'. Xem `packages.security.permissions`.
-    admin_role_extra: Mapped[str | None] = mapped_column(
-        String(16), nullable=True
-    )
+    admin_role_extra: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     balance_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0), default=Decimal(0))
     locale: Mapped[str] = mapped_column(String(8), default="vi")
@@ -379,9 +455,7 @@ class TwoFactor(Base):
 
 class OAuthIdentity(Base):
     __tablename__ = "oauth_identities"
-    __table_args__ = (
-        UniqueConstraint("provider", "subject", name="uq_oauth_provider_subject"),
-    )
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_oauth_provider_subject"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"oid_{secrets.token_urlsafe(16)}"
@@ -451,9 +525,7 @@ class Invoice(Base):
     issued_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
     coupon_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     discount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0), default=Decimal(0))
-    original_amount_vnd: Mapped[Decimal | None] = mapped_column(
-        Numeric(18, 0), nullable=True
-    )
+    original_amount_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
 
 
 class Coupon(Base):
@@ -467,9 +539,7 @@ class Coupon(Base):
     """
 
     __tablename__ = "coupons"
-    __table_args__ = (
-        UniqueConstraint("code", name="uq_coupons_code"),
-    )
+    __table_args__ = (UniqueConstraint("code", name="uq_coupons_code"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"cpn_{secrets.token_urlsafe(12)}"
@@ -479,16 +549,12 @@ class Coupon(Base):
     discount_type: Mapped[str] = mapped_column(String(16))  # percent | fixed
     percent_off: Mapped[int | None] = mapped_column(nullable=True)
     amount_off_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
-    max_discount_vnd: Mapped[Decimal | None] = mapped_column(
-        Numeric(18, 0), nullable=True
-    )
+    max_discount_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
     min_amount_vnd: Mapped[Decimal | None] = mapped_column(Numeric(18, 0), nullable=True)
     max_redemptions: Mapped[int | None] = mapped_column(nullable=True)
     max_per_user: Mapped[int] = mapped_column(default=1)
     redeemed_count: Mapped[int] = mapped_column(default=0)
-    valid_from: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
@@ -503,9 +569,7 @@ class CouponRedemption(Base):
     """Audit trail: mỗi lần một user redeem coupon thành công."""
 
     __tablename__ = "coupon_redemptions"
-    __table_args__ = (
-        Index("ix_coupon_redemptions_coupon_user", "coupon_id", "user_id"),
-    )
+    __table_args__ = (Index("ix_coupon_redemptions_coupon_user", "coupon_id", "user_id"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"crd_{secrets.token_urlsafe(12)}"
@@ -513,9 +577,7 @@ class CouponRedemption(Base):
     coupon_id: Mapped[str] = mapped_column(ForeignKey("coupons.id"), index=True)
     coupon_code: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    invoice_id: Mapped[str | None] = mapped_column(
-        ForeignKey("invoices.id"), nullable=True
-    )
+    invoice_id: Mapped[str | None] = mapped_column(ForeignKey("invoices.id"), nullable=True)
     subscription_id: Mapped[str | None] = mapped_column(
         ForeignKey("subscriptions.id"), nullable=True
     )
@@ -592,9 +654,7 @@ class CryptoToken(Base):
     contract_address: Mapped[str] = mapped_column(String(128), index=True)
     decimals: Mapped[int] = mapped_column(Integer, default=18)
     min_invoice_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18), default=Decimal("1"))
-    max_invoice_amount: Mapped[Decimal] = mapped_column(
-        Numeric(36, 18), default=Decimal("100000")
-    )
+    max_invoice_amount: Mapped[Decimal] = mapped_column(Numeric(36, 18), default=Decimal("100000"))
     dust_precision: Mapped[int] = mapped_column(Integer, default=6)
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -793,9 +853,7 @@ class Notification(Base):
     sent_at: Mapped[datetime | None]
     # Retry/DLQ fields. status='pending' (chờ gửi), 'sent' (đã set sent_at),
     # 'dead' (vượt max_attempts). next_run_at để dispatcher chỉ pick row due.
-    status: Mapped[str] = mapped_column(
-        String(16), default="pending", index=True
-    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5)
     next_run_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
@@ -913,9 +971,7 @@ class UserTag(Base):
     """Tag/segment cho user (vip, fraud_watch, ...)."""
 
     __tablename__ = "user_tags"
-    __table_args__ = (
-        UniqueConstraint("user_id", "tag", name="uq_user_tag"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "tag", name="uq_user_tag"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"ut_{secrets.token_urlsafe(12)}"
@@ -967,9 +1023,7 @@ class TermsAcceptance(Base):
     """Log mỗi lần user accept Terms/Privacy với version cụ thể."""
 
     __tablename__ = "terms_acceptances"
-    __table_args__ = (
-        Index("ix_terms_acceptances_user_kind", "user_id", "kind"),
-    )
+    __table_args__ = (Index("ix_terms_acceptances_user_kind", "user_id", "kind"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"tac_{secrets.token_urlsafe(12)}"
@@ -986,9 +1040,7 @@ class SecurityEvent(Base):
     email_change, ip_change, api_key_rotate, …) cho FE Settings hiển thị."""
 
     __tablename__ = "security_events"
-    __table_args__ = (
-        Index("ix_security_events_user_created", "user_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_security_events_user_created", "user_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"sev_{secrets.token_urlsafe(12)}"
@@ -1006,9 +1058,7 @@ class BillingProfile(Base):
 
     __tablename__ = "billing_profiles"
 
-    user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id"), primary_key=True
-    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tax_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1025,9 +1075,7 @@ class WithdrawalRequest(Base):
         String(64), primary_key=True, default=lambda: f"wr_{secrets.token_urlsafe(12)}"
     )
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    bank_account_id: Mapped[str] = mapped_column(
-        ForeignKey("bank_accounts.id")
-    )
+    bank_account_id: Mapped[str] = mapped_column(ForeignKey("bank_accounts.id"))
     amount_vnd: Mapped[Decimal] = mapped_column(Numeric(18, 0))
     status: Mapped[str] = mapped_column(
         String(16), default="pending", index=True
@@ -1062,9 +1110,7 @@ class TicketMessage(Base):
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: f"tm_{secrets.token_urlsafe(12)}"
     )
-    ticket_id: Mapped[str] = mapped_column(
-        ForeignKey("support_tickets.id"), index=True
-    )
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("support_tickets.id"), index=True)
     author_id: Mapped[str] = mapped_column(String(64))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     body: Mapped[str] = mapped_column(Text)
@@ -1079,18 +1125,99 @@ def normalize_order_code(value: str) -> str:
 
 
 def _generate_order_code() -> str:
+    return secrets.choice(_payment_names())
+
+
+def _payment_names() -> list[str]:
     surnames = [
-        "NGUYEN", "TRAN", "LE", "PHAM", "HOANG", "HUYNH", "PHAN", "VU", "VO", "DANG",
-        "BUI", "DO", "HO", "NGO", "DUONG", "LY", "DINH", "TRINH", "MA", "CAO", "LUONG",
-        "LUU", "TRUONG", "TA", "DAO", "LAM", "CHAU", "TO", "LA", "QUACH",
+        "NGUYEN",
+        "TRAN",
+        "LE",
+        "PHAM",
+        "HOANG",
+        "HUYNH",
+        "PHAN",
+        "VU",
+        "VO",
+        "DANG",
+        "BUI",
+        "DO",
+        "HO",
+        "NGO",
+        "DUONG",
+        "LY",
+        "DINH",
+        "TRINH",
+        "MA",
+        "CAO",
+        "LUONG",
+        "LUU",
+        "TRUONG",
+        "TA",
+        "DAO",
+        "LAM",
+        "CHAU",
+        "TO",
+        "LA",
+        "QUACH",
     ]
     middles = [
-        "VAN", "THI", "TIEN", "MINH", "QUANG", "DUC", "HUU", "NGOC", "THANH", "HOANG",
-        "GIA", "BAO", "TUAN", "HAI", "XUAN", "NHAT", "TRUNG", "KIM", "ANH", "KHANH",
+        "VAN",
+        "THI",
+        "TIEN",
+        "MINH",
+        "QUANG",
+        "DUC",
+        "HUU",
+        "NGOC",
+        "THANH",
+        "HOANG",
+        "GIA",
+        "BAO",
+        "TUAN",
+        "HAI",
+        "XUAN",
+        "NHAT",
+        "TRUNG",
+        "KIM",
+        "ANH",
+        "KHANH",
     ]
     names = [
-        "DAT", "AN", "BINH", "CUONG", "DUNG", "DUY", "GIANG", "HIEU", "HOA", "HUNG", "HUY",
-        "KHANG", "KHOA", "KIEN", "LINH", "LONG", "NAM", "PHONG", "PHUC", "QUAN", "QUYNH",
-        "SON", "TAM", "THAO", "THIEN", "THINH", "TRANG", "TRIEU", "VINH", "YEN",
+        "DAT",
+        "AN",
+        "BINH",
+        "CUONG",
+        "DUNG",
+        "DUY",
+        "GIANG",
+        "HIEU",
+        "HOA",
+        "HUNG",
+        "HUY",
+        "KHANG",
+        "KHOA",
+        "KIEN",
+        "LINH",
+        "LONG",
+        "NAM",
+        "PHONG",
+        "PHUC",
+        "QUAN",
+        "QUYNH",
+        "SON",
+        "TAM",
+        "THAO",
+        "THIEN",
+        "THINH",
+        "TRANG",
+        "TRIEU",
+        "VINH",
+        "YEN",
     ]
-    return " ".join(secrets.choice(parts) for parts in (surnames, middles, names)) + " chuyen tien"
+    return [
+        f"{surname} {middle} {name} chuyen tien"
+        for surname in surnames
+        for middle in middles
+        for name in names
+    ]

@@ -135,9 +135,7 @@ class VietinAdapter:
         if response.status_code == 429:
             raise BankRateLimited(f"vietin login rate-limited: {response.text}")
         if response.status_code >= 400:
-            raise BankAuthError(
-                f"vietin login http {response.status_code}: {response.text[:200]}"
-            )
+            raise BankAuthError(f"vietin login http {response.status_code}: {response.text[:200]}")
         return cast("dict[str, Any]", response.json())
 
     async def health(self) -> bool:
@@ -153,10 +151,14 @@ class VietinAdapter:
         if self._access_token is None:
             await self.login()
         # VietinBank lọc theo giờ VN giống MB → convert trước khi format.
-        start_vn = (start.astimezone(_VN_TZ) if start.tzinfo
-                    else start.replace(tzinfo=UTC).astimezone(_VN_TZ))
-        end_vn = (end.astimezone(_VN_TZ) if end.tzinfo
-                  else end.replace(tzinfo=UTC).astimezone(_VN_TZ))
+        start_vn = (
+            start.astimezone(_VN_TZ)
+            if start.tzinfo
+            else start.replace(tzinfo=UTC).astimezone(_VN_TZ)
+        )
+        end_vn = (
+            end.astimezone(_VN_TZ) if end.tzinfo else end.replace(tzinfo=UTC).astimezone(_VN_TZ)
+        )
 
         client = self._ensure_client()
         # TODO(reverse-engineer): body & header chính xác
@@ -176,9 +178,7 @@ class VietinAdapter:
         if resp.status_code == 429:
             raise BankRateLimited("vietin history rate-limited")
         if resp.status_code >= 400:
-            raise BankError(
-                f"vietin history http {resp.status_code}: {resp.text[:200]}"
-            )
+            raise BankError(f"vietin history http {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         for raw in _extract_items(data):
             yield map_vietin_transaction(raw)
@@ -228,28 +228,19 @@ def map_vietin_transaction(raw: dict[str, Any]) -> BankTransaction:
 
     return BankTransaction(
         bank_ref_no=str(
-            raw.get("refNo")
-            or raw.get("transactionRef")
-            or raw.get("ref")
-            or raw.get("id")
+            raw.get("refNo") or raw.get("transactionRef") or raw.get("ref") or raw.get("id")
         ),
         posted_at=_parse_datetime(
-            str(
-                raw.get("transDate")
-                or raw.get("transactionDate")
-                or raw.get("postingDate")
-                or ""
-            )
+            str(raw.get("transDate") or raw.get("transactionDate") or raw.get("postingDate") or "")
         ),
         amount=amount,
         content=str(raw.get("description") or raw.get("remark") or raw.get("memo") or ""),
-        counter_account=_optional_str(
-            raw.get("counterAccount") or raw.get("benAccountNo")
-        ),
-        counter_name=_optional_str(
-            raw.get("counterName") or raw.get("benAccountName")
-        ),
+        counter_account=_optional_str(raw.get("counterAccount") or raw.get("benAccountNo")),
+        counter_name=_optional_str(raw.get("counterName") or raw.get("benAccountName")),
         raw=raw,
+        timestamp_reliable=_reliable_timestamp(
+            str(raw.get("transDate") or raw.get("transactionDate") or raw.get("postingDate") or "")
+        ),
     )
 
 
@@ -261,6 +252,20 @@ def _parse_amount(value: Any) -> Decimal:
         return Decimal(text)
     except Exception:  # noqa: BLE001
         return Decimal("0")
+
+
+def _reliable_timestamp(value: str) -> bool:
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            datetime.strptime(value, fmt)
+            return True
+        except ValueError:
+            pass
+    try:
+        parsed = datetime.fromisoformat(value)
+        return "T" in value and parsed.tzinfo is not None
+    except ValueError:
+        return False
 
 
 def _parse_datetime(value: str) -> datetime:

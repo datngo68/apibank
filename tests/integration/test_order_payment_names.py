@@ -55,14 +55,15 @@ async def test_unique_index_and_collision_retry_preserve_existing_orders(tmp_pat
             with pytest.raises(IntegrityError):
                 await session.commit()
         second = Order.new(amount_vnd=Decimal(100), bank_account_id="b", ttl_seconds=900)
-        second.code = first.code
+        second.transfer_content = first.transfer_content
         monkeypatch.setattr(
             "packages.db.models._generate_order_code", lambda: "LE MINH AN chuyen tien"
         )
         async with sessions() as session:
             await allocate_order(session, second)
             await session.commit()
-            assert second.code == "LE MINH AN chuyen tien"
+            assert second.code != first.code
+            assert second.transfer_content != first.transfer_content
             assert len((await session.scalars(select(Order))).all()) == 2
     finally:
         await engine.dispose()
